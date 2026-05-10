@@ -227,6 +227,40 @@ def create_health_app(
         except Exception as exc:
             return {"error": f"获取账户信息失败: {exc}"}
 
+    @app.get("/health/fees")
+    async def health_fees():
+        """手续费统计 (不同周期)."""
+        if db is None:
+            return {"error": "数据库不可用"}
+        try:
+            # All-time
+            all_rows = await db.fetch_all("""
+                SELECT f.commission, f.commission_asset, o.symbol
+                FROM fills f JOIN orders o ON o.id = f.order_id
+            """)
+            total_commission = sum(float(r.get("commission", 0)) for r in all_rows)
+            by_symbol: dict[str, float] = {}
+            for r in all_rows:
+                sym = r.get("symbol", "unknown")
+                by_symbol[sym] = by_symbol.get(sym, 0) + float(r.get("commission", 0))
+
+            # Past 7 days
+            from datetime import datetime as dt, timezone as tz, timedelta
+            cutoff = (dt.now(tz=tz.utc) - timedelta(days=7)).isoformat()
+            rows7 = await db.fetch_all(
+                """SELECT f.commission FROM fills f
+                   WHERE f.filled_at >= ?""", (cutoff,),
+            )
+            comm_7d = sum(float(r.get("commission", 0)) for r in rows7)
+
+            return {
+                "total_commission": round(total_commission, 6),
+                "commission_7d": round(comm_7d, 6),
+                "by_symbol": {k: round(v, 6) for k, v in sorted(by_symbol.items(), key=lambda x: -x[1])[:10]},
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
     @app.get("/health/trades")
     async def health_trades():
         """返回最近成交记录 (JOIN fills + orders)."""

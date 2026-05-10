@@ -1058,11 +1058,31 @@ async def _execute_signal(
 
     await order_manager.record_order(result, signal.strategy_id)
 
-    # Get actual fill price
+    # Get actual fill price — wait for market order to fill
     fill_price = result.avg_price or result.price or entry_price
 
     # Notify
     if signal.action.startswith("OPEN"):
+        # 等待订单成交 (Market order 异步成交, 需要轮询)
+        if fill_price <= 0:
+            for _ in range(10):  # 最多等 5 秒
+                await asyncio.sleep(0.5)
+                try:
+                    updated = await executor.get_order(
+                        signal.symbol, client_order_id=result.client_order_id
+                    )
+                    if updated and updated.avg_price > 0:
+                        fill_price = updated.avg_price
+                        result = updated
+                        break
+                except Exception:
+                    pass
+            if fill_price <= 0:
+                fill_price = entry_price  # 兜底用信号价格
+
+        # 同步持仓确保仓位存在
+        await position_manager.sync_from_exchange(executor)
+
         notifier.position_opened(signal.symbol, pos_side, fill_price, qty)
 
         # ---- Place exchange-native Stop-Loss and Take-Profit ----
@@ -1079,16 +1099,6 @@ async def _execute_signal(
                 sl_price = fill_price * (1 + sl_pct / 100)
         else:
             sl_price = 0
-
-        if signal.take_profit > 0:
-            tp_price = signal.take_profit
-        elif fill_price > 0:
-            if pos_side == "LONG":
-                tp_price = fill_price * (1 + tp_pct / 100)
-            else:
-                tp_price = fill_price * (1 - tp_pct / 100)
-        else:
-            tp_price = 0
 
         # 止损止盈必须成功放置, 否则平掉刚开的仓位
         sl_tp_placed = False

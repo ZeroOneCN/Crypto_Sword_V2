@@ -87,7 +87,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="stat-card"><div class="label">可用余额</div><div class="value" style="color:#93c5fd">--</div><div class="sub">可开仓</div></div>
   <div class="stat-card"><div class="label">未实现盈亏</div><div class="value" id="stat_upnl">--</div><div class="sub">浮动</div></div>
   <div class="stat-card"><div class="label">保证金率</div><div class="value" id="stat_margin">--</div><div class="sub">越低越安全</div></div>
-  <div class="stat-card"><div class="label">持仓数</div><div class="value" style="color:#a78bfa">--</div><div class="sub">当前仓位</div></div>
+  <div class="stat-card"><div class="label">持仓数</div><div class="value" id="stat_poscount" style="color:#a78bfa">--</div><div class="sub">已开 / 上限</div></div>
   <div class="stat-card"><div class="label">风控状态</div><div class="value" id="stat_cb" style="font-size:1rem">--</div><div class="sub">熔断 / 正常</div></div>
 </div>
 
@@ -161,11 +161,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
 <div class="footer">
   <span>CryptoPilot v1.3</span>
-  <span>刷新间隔 10s | 最近更新: <span id="last_update">--</span></span>
+  <span>刷新间隔 5s | 最近更新: <span id="last_update">--</span></span>
 </div>
 
 <script>
-const REFRESH_MS = 10000;
+const REFRESH_MS = 5000;
 let countdown = REFRESH_MS / 1000;
 let currentPeriod = 'all';
 
@@ -209,7 +209,7 @@ async function load() {
       cards[0].querySelector('.value').textContent = fmtUSD(d.total_balance).replace('$','');
       cards[1].querySelector('.value').textContent = fmtUSD(d.available_balance).replace('$','');
       const upnlEl = document.getElementById('stat_upnl');
-      upnlEl.textContent = fmtPct(d.unrealized_pnl);
+      upnlEl.textContent = fmtUSD(d.unrealized_pnl);
       upnlEl.style.color = d.unrealized_pnl >= 0 ? '#4ade80' : '#f87171';
       const mrEl = document.getElementById('stat_margin');
       mrEl.textContent = fmtPct(d.margin_ratio * 100);
@@ -219,12 +219,11 @@ async function load() {
 
   // ---- Positions (for count) ----
   try {
-    const r = await fetch('/health/positions');
+    const r = await fetch('/health/positions?_=' + Date.now());
     const d = await r.json();
     if (!d.error) {
-      const cards = document.querySelectorAll('#account_bar .stat-card');
-      cards[4].querySelector('.value').textContent = d.count;
-      document.getElementById('hint_pos').textContent = '共 ' + d.count + ' 个';
+      document.getElementById('stat_poscount').textContent = d.count + ' / ' + (window.maxPositions || 5);
+      document.getElementById('hint_pos').textContent = d.count + ' / ' + (window.maxPositions || 5) + ' 个';
     }
   } catch(e) {}
 
@@ -272,7 +271,7 @@ async function load() {
 
   // ---- Positions detail ----
   try {
-    const r = await fetch('/health/positions');
+    const r = await fetch('/health/positions?_=' + Date.now());
     const d = await r.json();
     if (!d.error && d.positions && d.positions.length > 0) {
       let html = '<div class="scroll-table"><table><tr><th>币种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th><th>杠杆</th></tr>';
@@ -282,9 +281,9 @@ async function load() {
         html += '<tr>' +
           '<td><strong>' + p.symbol + '</strong></td>' +
           '<td><span class="badge ' + (side === 'LONG' ? 'badge-long' : 'badge-short') + '">' + side + '</span></td>' +
-          '<td>' + fmtNum(p.qty) + '</td>' +
-          '<td>' + fmtNum(p.entry_price) + '</td>' +
-          '<td>' + fmtNum(p.mark_price) + '</td>' +
+          '<td>' + fmtNum(p.qty, 3) + '</td>' +
+          '<td>' + fmtNum(p.entry_price, 5) + '</td>' +
+          '<td>' + fmtNum(p.mark_price, 5) + '</td>' +
           '<td class="' + cn(pnl) + '">' + fmtUSD(pnl) + '</td>' +
           '<td>' + (p.leverage || '--') + 'x</td>' +
           '</tr>';
@@ -310,15 +309,15 @@ async function load() {
       d.trades.slice(0, 30).forEach(t => {
         const side = (t.side || '').toUpperCase();
         const sideCls = side === 'BUY' ? 'badge-long' : 'badge-short';
-        const tm = t.filled_at ? new Date(t.filled_at + 'Z').toLocaleTimeString() : '-';
+        const tm = t.filled_at ? new Date(t.filled_at).toLocaleTimeString() : '-';
         const strat = (t.strategy_name || t.type || '-');
         html += '<tr>' +
           '<td class="nowrap">' + tm + '</td>' +
           '<td><strong>' + t.symbol + '</strong></td>' +
           '<td><span class="badge ' + sideCls + '">' + side + '</span></td>' +
-          '<td>' + fmtNum(t.price, 4) + '</td>' +
-          '<td>' + fmtNum(t.qty) + '</td>' +
-          '<td>' + fmtNum(t.commission, 4) + '</td>' +
+          '<td>' + fmtNum(t.price, 5) + '</td>' +
+          '<td>' + fmtNum(t.qty, 4) + '</td>' +
+          '<td>' + fmtNum(t.commission, 6) + '</td>' +
           '<td class="truncate" title="' + (strat) + '">' + (strat.length > 15 ? strat.slice(0,15)+'..' : strat) + '</td>' +
           '</tr>';
       });
