@@ -106,7 +106,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   <div class="card">
     <h2>当前持仓 <span class="hint" id="hint_pos"></span></h2>
-    <div id="positions"><div class="scroll-table"><table><tr><th>币种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th><th>杠杆</th></tr></table></div><p style="text-align:center;padding:20px;color:#64748b;">暂无持仓</p></div>
+    <div id="positions"><div class="scroll-table"><table><tr><th>币种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th><th>ROI</th><th>保护单</th></tr></table></div><p style="text-align:center;padding:20px;color:#64748b;">暂无持仓</p></div>
   </div>
 </div>
 
@@ -260,15 +260,32 @@ async function load() {
     document.getElementById('sys_mode').textContent = 'ws_ok' in window && window.ws_ok ? 'WebSocket 实时' : 'WebSocket / REST 降级';
   } catch(e) {}
 
+  // ---- Protection orders ----
+  let protBySymbol = {};
+  try {
+    const r = await fetch('/health/orders?_=' + Date.now());
+    const d = await r.json();
+    if (!d.error && d.by_symbol) {
+      d.by_symbol.forEach(s => {
+        protBySymbol[s.symbol] = { sl: s.stop_orders, tp: s.tp_orders, total: s.total };
+      });
+    }
+  } catch(e) {}
+
   // ---- Positions detail ----
   try {
     const r = await fetch('/health/positions?_=' + Date.now());
     const d = await r.json();
     if (!d.error && d.positions && d.positions.length > 0) {
-      let html = '<div class="scroll-table"><table><tr><th>币种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th><th>杠杆</th></tr>';
+      let html = '<div class="scroll-table"><table><tr><th>币种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th><th>ROI</th><th>保护单</th></tr>';
       d.positions.forEach(p => {
         const pnl = parseFloat(p.unrealized_pnl || 0);
+        const roi = parseFloat(p.roi_pct || 0);
         const side = (p.side || '').toUpperCase();
+        const prot = protBySymbol[p.symbol] || { sl: 0, tp: 0 };
+        const protHtml = (prot.sl > 0 || prot.tp > 0)
+          ? '<span class="badge badge-ok">SL:' + prot.sl + ' TP:' + prot.tp + '</span>'
+          : '<span class="badge badge-err" style="animation:pulse 1s infinite">裸仓!</span>';
         html += '<tr>' +
           '<td><strong>' + p.symbol + '</strong></td>' +
           '<td><span class="badge ' + (side === 'LONG' ? 'badge-long' : 'badge-short') + '">' + side + '</span></td>' +
@@ -276,7 +293,8 @@ async function load() {
           '<td>' + fmtNum(p.entry_price, 5) + '</td>' +
           '<td>' + fmtNum(p.mark_price, 5) + '</td>' +
           '<td class="' + cn(pnl) + '">' + fmtUSD(pnl) + '</td>' +
-          '<td>' + (p.leverage || '--') + 'x</td>' +
+          '<td class="' + cn(roi) + '">' + fmtPct(roi) + '</td>' +
+          '<td>' + protHtml + '</td>' +
           '</tr>';
       });
       html += '</table></div>';

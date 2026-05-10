@@ -184,13 +184,76 @@ def create_health_app(
 
     @app.get("/health/positions")
     async def health_positions():
-        """Return current open positions."""
+        """Return current open positions with enhanced data."""
         if position_manager is None:
             return {"error": "Position manager not available"}
+        positions = position_manager.get_all_positions()
+
+        # 增强: 获取实时标记价和计算 ROI
+        try:
+            if order_executor:
+                exchange_positions = await order_executor.get_position_info()
+                # 用交易所最新数据增强
+                for pos in positions:
+                    sym = pos.get("symbol", "")
+                    for ep in exchange_positions:
+                        if ep.symbol == sym:
+                            pos["mark_price"] = ep.mark_price
+                            pos["unrealized_pnl"] = round(ep.unrealized_pnl, 4)
+                            pos["leverage"] = ep.leverage
+                            pos["liquidation_price"] = ep.liquidation_price
+                            # 计算 ROI%
+                            if ep.entry_price > 0:
+                                pos["roi_pct"] = round(
+                                    (ep.mark_price - ep.entry_price) / ep.entry_price * 100 * ep.leverage, 2
+                                )
+                            pos["notional"] = round(abs(ep.quantity) * ep.mark_price, 2)
+                            break
+        except Exception:
+            pass
+
         return {
             "count": position_manager.position_count,
-            "positions": position_manager.get_all_positions(),
+            "positions": positions,
         }
+
+    @app.get("/health/orders")
+    async def health_orders():
+        """返回当前挂单状态 (含 SL/TP 保护单统计)."""
+        if order_executor is None:
+            return {"error": "订单执行器不可用"}
+        try:
+            open_orders = await order_executor.get_open_orders()
+            # 按币种分组统计保护单
+            by_symbol: dict[str, dict] = {}
+            for o in open_orders:
+                sym = o.symbol
+                if sym not in by_symbol:
+                    by_symbol[sym] = {
+                        "symbol": sym,
+                        "total": 0, "stop_orders": 0, "tp_orders": 0,
+                        "orders": [],
+                    }
+                info = by_symbol[sym]
+                info["total"] += 1
+                if o.order_type in ("STOP_MARKET", "STOP", "STOP_LOSS"):
+                    info["stop_orders"] += 1
+                elif o.order_type in ("TAKE_PROFIT_MARKET", "TAKE_PROFIT", "LIMIT"):
+                    info["tp_orders"] += 1
+                info["orders"].append({
+                    "type": o.order_type,
+                    "side": o.side,
+                    "price": o.price,
+                    "stop_price": o.stop_price,
+                    "qty": o.orig_qty,
+                    "status": o.status,
+                })
+            return {
+                "total": len(open_orders),
+                "by_symbol": list(by_symbol.values()),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
 
     @app.get("/health/circuit")
     async def health_circuit():
