@@ -441,6 +441,27 @@ async def main() -> None:
                     logger.warning(f"信号被拒绝 — 熔断已触发: {signal.action}")
                     continue
 
+                # ---- 开仓风控检查 ----
+                if signal.action in ("OPEN_LONG", "OPEN_SHORT"):
+                    # 1. 最大持仓数检查
+                    pos_count = position_manager.position_count
+                    max_pos = cfg.risk.max_positions
+                    if pos_count >= max_pos:
+                        logger.warning(
+                            f"信号被拒绝 — 已达最大持仓数 ({pos_count}/{max_pos}): "
+                            f"{signal.symbol} {signal.action}"
+                        )
+                        continue
+
+                    # 2. 同币种重复开仓检查
+                    existing = position_manager.get_position(signal.symbol)
+                    if existing and abs(existing.get("qty", 0)) > 0:
+                        logger.info(
+                            f"信号跳过 — {signal.symbol} 已有持仓 "
+                            f"({existing.get('side', '')} {existing.get('qty', 0)})"
+                        )
+                        continue
+
                 # Look up strategy-specific risk config
                 strat_risk = {}
                 for sc in cfg.strategies:
@@ -889,12 +910,12 @@ async def _execute_signal(
 
         # ---- Place exchange-native Stop-Loss and Take-Profit ----
         risk = risk_config or {}
-        sl_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 2.0)
-        tp_pct = signal.take_profit_pct or risk.get("take_profit_pct", 5.0)
+        sl_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 3.0)
+        tp_pct = signal.take_profit_pct or risk.get("take_profit_pct", 6.0)
 
         if signal.stop_loss > 0:
             sl_price = signal.stop_loss
-        elif sl_pct > 0 and fill_price > 0:
+        elif fill_price > 0:
             if pos_side == "LONG":
                 sl_price = fill_price * (1 - sl_pct / 100)
             else:
@@ -904,7 +925,7 @@ async def _execute_signal(
 
         if signal.take_profit > 0:
             tp_price = signal.take_profit
-        elif tp_pct > 0 and fill_price > 0:
+        elif fill_price > 0:
             if pos_side == "LONG":
                 tp_price = fill_price * (1 + tp_pct / 100)
             else:
@@ -912,9 +933,10 @@ async def _execute_signal(
         else:
             tp_price = 0
 
-        if sl_price > 0:
-            try:
-                # 止损单: 全量 STOP_MARKET
+        # 止损止盈必须成功放置, 否则平掉刚开的仓位
+        sl_tp_placed = False
+        try:
+            if sl_price > 0:
                 sl_req = OrderRequest(
                     symbol=signal.symbol,
                     side="SELL" if pos_side == "LONG" else "BUY",
@@ -928,7 +950,6 @@ async def _execute_signal(
                 sl_result = await executor.create_order(sl_req)
                 await order_manager.record_order(sl_result, signal.strategy_id)
 
-                # 三级分批止盈: TP1(30%) / TP2(30%) / TP3(40%)
                 tp_results = await executor.create_three_tier_tp(
                     symbol=signal.symbol,
                     position_side=pos_side,
@@ -940,12 +961,36 @@ async def _execute_signal(
                 )
                 for r in tp_results:
                     await order_manager.record_order(r, signal.strategy_id)
-
+                sl_tp_placed = True
                 logger.info(
-                    f"保护单已提交: SL={sl_price:.4f} + TP1/2/3 共 {len(tp_results)} 个"
+                    f"保护单已提交: {signal.symbol} SL={sl_price:.4f} "
+                    f"+ TP1/2/3 共 {len(tp_results)} 个"
+                )
+            else:
+                logger.error(f"{signal.symbol} 止损价格无效 (sl_price={sl_price})")
+        except Exception:
+            logger.exception(f"提交 {signal.symbol} 保护单失败, 将平掉裸仓")
+
+        if not sl_tp_placed:
+            # 保护单失败 → 立即平仓
+            try:
+                close_side = "SELL" if pos_side == "LONG" else "BUY"
+                close_req = OrderRequest(
+                    symbol=signal.symbol,
+                    side=close_side,
+                    order_type="MARKET",
+                    quantity=qty,
+                    reduce_only=True,
+                    position_side=pos_side,
+                    client_order_id=_make_client_id("emergency"),
+                )
+                close_result = await executor.create_order(close_req)
+                await order_manager.record_order(close_result, signal.strategy_id)
+                logger.warning(
+                    f"裸仓已平: {signal.symbol} — SL/TP 放置失败, 已紧急市价平仓"
                 )
             except Exception:
-                logger.exception(f"提交 {signal.symbol} 保护单失败")
+                logger.exception(f"紧急平仓也失败了: {signal.symbol} — 需人工处理!")
     else:
         pnl = _calc_pnl(position_manager, signal.symbol, fill_price, qty)
         notifier.position_closed(signal.symbol, pos_side, fill_price, pnl)

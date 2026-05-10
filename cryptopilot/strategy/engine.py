@@ -243,6 +243,10 @@ class StrategyEngine:
                                 pass
 
                     for cand in top:
+                        # 跳过已有持仓的币种 (避免重复开仓)
+                        if self._position_manager.get_position(cand.symbol):
+                            continue
+
                         # REST 按需拉取: K线 + OI历史 + 标记价 → 填入缓存供因子使用
                         if rest_data:
                             try:
