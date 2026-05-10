@@ -126,6 +126,16 @@ class ScoringEngine:
             norm_score = 0
 
         direction = self._determine_direction(norm_score, factor_scores)
+
+        # 均值回归过滤: 暴涨不做多, 暴跌不做空
+        change_24h = getattr(candidate, "change_24h_pct", 0) or 0
+        if direction == "LONG" and change_24h > 8.0:
+            direction = "HOLD"
+            norm_score = norm_score * 0.3  # 大跌后反弹才安全
+        elif direction == "SHORT" and change_24h < -8.0:
+            direction = "HOLD"
+            norm_score = norm_score * 0.3
+
         confidence = self._calc_confidence(factor_scores, direction)
 
         best_factors = sorted(factor_scores, key=lambda f: f.score, reverse=True)[:3]
