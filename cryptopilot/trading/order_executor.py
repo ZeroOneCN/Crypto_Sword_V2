@@ -789,7 +789,7 @@ class OrderExecutor:
         if is_algo:
             params["stopPrice"] = str(req.stop_price)
             params["workingType"] = "MARK_PRICE"
-        if req.reduce_only and not is_algo:
+        if req.reduce_only and not is_algo and not (req.position_side and req.position_side != "BOTH"):
             params["reduceOnly"] = "true"
         return params
 

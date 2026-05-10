@@ -1300,7 +1300,7 @@ async def _execute_signal(
                     tp_reqs.append(OrderRequest(
                         symbol=signal.symbol, side=close_side,
                         order_type="LIMIT", quantity=tp_qty,
-                        price=tp_price_c, reduce_only=True,
+                        price=tp_price_c, reduce_only=False,
                         position_side=pos_side,
                         client_order_id=_make_client_id(label.lower()),
                         time_in_force="GTC",
