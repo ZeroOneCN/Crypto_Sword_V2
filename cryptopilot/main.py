@@ -534,6 +534,7 @@ async def main() -> None:
         margin_monitor=margin_monitor,
         candidate_pool=candidate_pool,
         scoring_engine=scoring_engine,
+        order_executor=order_executor,
     )
     add_dashboard_route(health_app)
 

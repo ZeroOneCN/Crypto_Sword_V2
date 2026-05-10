@@ -31,6 +31,7 @@ def create_health_app(
     margin_monitor=None,
     candidate_pool=None,
     scoring_engine=None,
+    order_executor=None,
 ) -> FastAPI:
     """Build the FastAPI app with injected dependencies."""
 
@@ -187,6 +188,23 @@ def create_health_app(
             "scanner_score": round(target.scanner_score, 1),
             "reasons": target.scrape_reasons,
         }
+
+    @app.get("/health/account")
+    async def health_account():
+        """实时账户数据."""
+        if order_executor is None:
+            return {"error": "订单执行器不可用"}
+        try:
+            acct = await order_executor.get_account_info()
+            return {
+                "total_balance": round(acct.total_balance, 2),
+                "available_balance": round(acct.available_balance, 2),
+                "unrealized_pnl": round(acct.unrealized_pnl, 2),
+                "margin_ratio": round(acct.margin_ratio, 4),
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            }
+        except Exception as exc:
+            return {"error": f"获取账户信息失败: {exc}"}
 
     @app.get("/health/signals")
     async def health_signals():
