@@ -12,7 +12,7 @@ from cryptopilot.market.types import KlineData, TickerData
 
 @dataclass
 class Signal:
-    """Trading signal emitted by a strategy."""
+    """Trading signal emitted by a strategy (V2 多因子扩展)."""
     strategy_id: str
     symbol: str
     action: str          # OPEN_LONG, OPEN_SHORT, CLOSE_LONG, CLOSE_SHORT
@@ -23,6 +23,10 @@ class Signal:
     stop_loss_pct: float = 0.0  # stop-loss distance as % of price
     take_profit_pct: float = 0.0  # take-profit distance as % of price
     comment: str = ""
+    # 🆕 V2 多因子上下文 (用于通知)
+    score: float = 0.0          # 综合评分 (0-100)
+    top_factors: list = None    # 前3贡献因子 [(name, direction, score), ...]
+    preset: str = ""            # 策略预设名 (composite/chase/ambush)
 
 
 class StrategyBase(ABC):

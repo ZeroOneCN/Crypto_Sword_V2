@@ -345,6 +345,10 @@ class StrategyEngine:
                         # 追踪最强信号
                         if abs_score > best_score:
                             best_score = abs_score
+                            # 提取前3贡献因子
+                            top3 = sorted(
+                                result.factors, key=lambda f: abs(f.score), reverse=True
+                            )[:3]
                             best_signal = BaseSignal(
                                 strategy_id=f"scanner_{result.symbol}",
                                 symbol=result.symbol,
@@ -354,6 +358,9 @@ class StrategyEngine:
                                 stop_loss_pct=3.0,
                                 take_profit_pct=6.0,
                                 comment=result.detail,
+                                score=result.total_score,
+                                top_factors=[(f.name, f.direction, f.score) for f in top3],
+                                preset=special_signals.get("_preset_name", "composite"),
                             )
 
                     # 每轮仅执行最强信号

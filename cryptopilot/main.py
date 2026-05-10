@@ -252,6 +252,39 @@ async def main() -> None:
                         "score": round(event.executed_qty, 4),
                         "detail": f"成交 {event.executed_qty}/{event.orig_qty} @{event.avg_price:.4f} PnL={event.realized_pnl:.2f}",
                     })
+
+                    # 🆕 TP/SL 触发检测
+                    cid = event.client_order_id or ""
+                    is_sl = event.order_type == "STOP_MARKET"
+                    is_tp = cid.startswith("tp")  # TP 单是 LIMIT 类型, 靠 client_order_id 识别
+                    if is_sl or is_tp:
+                        pnl = float(event.realized_pnl or 0)
+                        if is_sl:
+                            notifier.sl_triggered(
+                                symbol=event.symbol,
+                                price=float(event.avg_price or 0),
+                                pnl=pnl,
+                                pnl_pct=0.0,
+                            )
+                        elif is_tp:
+                            tier = 1
+                            if "tp2" in cid:
+                                tier = 2
+                            elif "tp3" in cid:
+                                tier = 3
+                            positions = position_manager.get_all_positions()
+                            remaining = 0.0
+                            for p in positions:
+                                if p.get("symbol") == event.symbol:
+                                    remaining = abs(float(p.get("qty", 0) or 0))
+                                    break
+                            notifier.tp_triggered(
+                                symbol=event.symbol,
+                                tier=tier,
+                                price=float(event.avg_price or 0),
+                                pnl=pnl,
+                                remaining_qty=remaining,
+                            )
             except Exception:
                 logger.exception("WS 订单更新处理异常")
 
@@ -560,11 +593,45 @@ async def main() -> None:
             )
         return "\n".join(lines)
 
+    async def get_positions_text() -> str:
+        """V2 持仓明细 (用于 Telegram /positions 命令)."""
+        positions = position_manager.get_all_positions()
+        if not positions:
+            return "📭 当前无持仓"
+        lines = [f"📊 **持仓明细** ({len(positions)} 个)\n"]
+        for p in positions:
+            sym = p.get("symbol", "?")
+            side = "📈 LONG" if p.get("side") == "LONG" else "📉 SHORT"
+            qty = abs(p.get("qty", 0))
+            entry = float(p.get("entry_price", 0) or 0)
+            mark = float(p.get("mark_price", 0) or 0)
+            pnl = float(p.get("unrealized_pnl", 0) or 0)
+            roi = ((mark - entry) / entry * 100) if entry > 0 else 0
+            if side == "📉 SHORT":
+                roi = -roi
+            lines.append(
+                f"**{sym}** {side}  {qty}张\n"
+                f"  入场: {entry:.5f} | 标记: {mark:.5f}\n"
+                f"  浮动: ${pnl:+.2f} ({roi:+.2f}%)"
+            )
+            # 保护单状态
+            orders = order_manager.get_open_orders(sym)
+            if orders:
+                sls = [o for o in orders if o.get("type") == "STOP_MARKET"]
+                tps = [o for o in orders if o.get("type") in ("TAKE_PROFIT_MARKET", "LIMIT")]
+                if sls:
+                    lines.append(f"  🛑 SL: {sls[0].get('stop_price', '?'):.5f}")
+                if tps:
+                    tp_str = " ".join([f"TP{o.get('client_order_id','?')[-3:]}:{o.get('price') or o.get('stop_price'):.5f}" for o in tps[:3]])
+                    lines.append(f"  🎯 {tp_str}")
+        return "\n".join(lines)
+
     telegram.set_callbacks(
         status_func=get_status_text,
         pause_func=strategy_engine.pause_all,
         resume_func=strategy_engine.resume_all,
         close_all_func=lambda: signal_queue.put(("EMERGENCY_CLOSE_ALL", {})),
+        positions_func=get_positions_text,
     )
 
     if cfg.notification.telegram_enabled:
@@ -572,8 +639,13 @@ async def main() -> None:
         notifier.register(Events.ORDER_FILLED, telegram.on_event)
         notifier.register(Events.POSITION_OPENED, telegram.on_event)
         notifier.register(Events.POSITION_CLOSED, telegram.on_event)
+        notifier.register(Events.TAKE_PROFIT_TRIGGERED, telegram.on_event)
+        notifier.register(Events.STOP_LOSS_TRIGGERED, telegram.on_event)
+        notifier.register(Events.PROTECTION_PLACED, telegram.on_event)
         notifier.register(Events.CIRCUIT_BREAKER_ACTIVATED, telegram.on_event)
         notifier.register(Events.STRATEGY_ERROR, telegram.on_event)
+        notifier.register(Events.WARNING, telegram.on_event)
+        notifier.register(Events.DAILY_REPORT, telegram.on_event)
 
     # ---- Market data -> Strategy dispatch ----
     # Subscribe the strategy engine to market data updates
@@ -1158,7 +1230,24 @@ async def _execute_signal(
             return
 
         fill_price = actual_fill_price if actual_fill_price > 0 else entry_price
-        notifier.position_opened(signal.symbol, pos_side, fill_price, qty)
+
+        # 🆕 V2 多因子开仓通知
+        factor_labels = [f"{name}" for name, direction, s in (signal.top_factors or [])]
+        notifier.position_opened(
+            symbol=signal.symbol,
+            side=pos_side,
+            price=fill_price,
+            qty=qty,
+            leverage=default_leverage,
+            score=signal.score,
+            top_factors=factor_labels,
+            sl_price=0.0,  # 后面填
+            tp_tiers=[],   # 后面填
+        )
+
+        # 记录开仓时间 (用于平仓通知计算持仓时长)
+        _execute_signal._position_open_time = getattr(_execute_signal, '_position_open_time', {})
+        _execute_signal._position_open_time[signal.symbol] = time.time()
 
         # ---- Place Stop-Loss + 3-Tier Take-Profit ----
         risk = risk_config or {}
@@ -1246,6 +1335,25 @@ async def _execute_signal(
                     f"TP1={tp1:.5f}(30%) TP2={tp2:.5f}(30%) TP3={tp3:.5f}(40%) "
                     f"[{tp_count}/3 个TP已放置]"
                 )
+
+                # 🆕 V2 保护单通知
+                if sl_tp_placed:
+                    sl_pct_val = abs(sl_price - fill_price) / fill_price * 100
+                    tp_placed = []
+                    tp_defs = [(tp1, tp1_pct, 0.30, 1), (tp2, tp2_pct, 0.30, 2), (tp3, tp3_pct, 0.40, 3)]
+                    for tp_price_val, tp_pct_val, tp_ratio_val, tp_tier in tp_defs:
+                        tp_placed.append({
+                            "tier": tp_tier,
+                            "price": tp_price_val,
+                            "pct": tp_pct_val,
+                            "qty_ratio": tp_ratio_val,
+                        })
+                    notifier.protection_placed(
+                        symbol=signal.symbol,
+                        sl_price=sl_price,
+                        sl_pct=sl_pct_val,
+                        tp_tiers=tp_placed,
+                    )
             else:
                 logger.error(f"{signal.symbol} 止损价无效 (sl={sl_price})")
         except Exception:
@@ -1272,7 +1380,41 @@ async def _execute_signal(
     else:
         close_fill_price = result.avg_price if result.avg_price > 0 else 0.0
         pnl = _calc_pnl(position_manager, signal.symbol, close_fill_price, qty)
-        notifier.position_closed(signal.symbol, pos_side, close_fill_price, pnl)
+
+        # 🆕 V2 平仓通知 — 带持仓时长和退出原因
+        pos = position_manager.get_position(signal.symbol)
+        entry_px = pos.get("entry_price", 0) if pos else 0
+        pnl_pct = ((close_fill_price - entry_px) / entry_px * 100) if entry_px > 0 else 0
+        if pos_side == "SHORT":
+            pnl_pct = -pnl_pct
+
+        # 计算持仓时长
+        open_times = getattr(_execute_signal, '_position_open_time', {})
+        open_ts = open_times.pop(signal.symbol, None)
+        hold_dur = ""
+        if open_ts:
+            dur_sec = time.time() - open_ts
+            m, s = divmod(int(dur_sec), 60)
+            if m < 60:
+                hold_dur = f"{m}m{s}s"
+            else:
+                h, m = divmod(m, 60)
+                hold_dur = f"{h}h{m:02d}m"
+
+        # 推断退出原因
+        exit_reason = "SIGNAL"  # 默认
+        if signal.action in ("CLOSE_LONG", "CLOSE_SHORT"):
+            exit_reason = "MANUAL" if "manual" in (signal.comment or "").lower() else "SIGNAL"
+
+        notifier.position_closed(
+            symbol=signal.symbol,
+            side=pos_side,
+            exit_price=close_fill_price,
+            pnl=pnl,
+            pnl_pct=pnl_pct,
+            exit_reason=exit_reason,
+            hold_duration=hold_dur,
+        )
 
     logger.info(f"订单已执行: {result.status} {side} {qty} {signal.symbol} [id={result.order_id}]")
 
