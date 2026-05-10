@@ -1180,7 +1180,7 @@ async def _execute_signal(
                 newClientOrderId=req.client_order_id,
             )
             result = _ws_to_order_result(raw)
-        except Exception:
+        except BaseException:
             logger.warning("WS 下单失败, 降级 REST")
             result = await executor.create_order(req)
     else:
