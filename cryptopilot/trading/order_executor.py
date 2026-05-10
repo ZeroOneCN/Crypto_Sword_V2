@@ -329,10 +329,22 @@ class OrderExecutor:
             return_exceptions=True,
         )
 
-        for r in results:
+        failed = []
+        for i, r in enumerate(results):
             if isinstance(r, Exception):
-                logger.error(f"SL/TP 订单失败: {r}")
-                raise OrderError(f"Failed to place SL/TP order: {r}") from r
+                failed.append((i, r))
+
+        if failed:
+            # 部分成功 → 回滚已成功的订单
+            logger.error(f"SL/TP 部分失败: {failed}, 回滚已成功订单...")
+            for i, r in enumerate(results):
+                if not isinstance(r, Exception) and r.order_id:
+                    try:
+                        await self.cancel_order(symbol, r.client_order_id)
+                    except Exception:
+                        logger.warning(f"回滚取消失败: {r.client_order_id}")
+            first_err = failed[0][1]
+            raise OrderError(f"Failed to place SL/TP order: {first_err}") from first_err
 
         logger.info(
             f"SL/TP 已提交 {symbol}: SL={stop_price:.4f} TP={take_profit_price:.4f} 数量={quantity}"
@@ -357,6 +369,16 @@ class OrderExecutor:
         POST /fapi/v1/order/oco
         """
         close_side = "SELL" if position_side == "LONG" else "BUY"
+
+        # 精度处理 (与 create_order 保持一致)
+        filters = self._symbol_info.get(symbol)
+        if filters:
+            step = filters["step_size"]
+            tick = filters["tick_size"]
+            quantity = clamp_qty(quantity, step, filters.get("min_qty", 0), filters["max_qty"])
+            take_profit_price = clamp_price(take_profit_price, tick)
+            stop_price = clamp_price(stop_price, tick)
+            stop_limit_price = clamp_price(stop_limit_price, tick)
 
         params: dict = {
             "symbol": symbol,
@@ -421,7 +443,7 @@ class OrderExecutor:
         tp1_pct: float = 3.0,
         tp2_pct: float = 6.0,
         tp3_pct: float = 10.0,
-    ) -> list[OrderResult]:
+    ) -> tuple[list[OrderResult], int]:
         """三级分批止盈: TP1(30%) / TP2(30%) / TP3(40%).
 
         crypto_sword 经典分批止盈:
@@ -499,11 +521,13 @@ class OrderExecutor:
             else:
                 valid.append(r)
 
+        failed_count = len(results) - len(valid)
         logger.info(
             f"三级止盈已提交 {symbol}: "
-            f"TP1=30%@{tp1_price:.4f} TP2=30%@{tp2_price:.4f} TP3=40%@{tp3_price:.4f}"
+            f"TP1=30%@{tp1_price:.4f} TP2=30%@{tp2_price:.4f} TP3=40%@{tp3_price:.4f} "
+            f"[成功={len(valid)} 失败={failed_count}]"
         )
-        return valid
+        return valid, failed_count
 
     async def get_order(self, symbol: str, client_order_id: str) -> OrderResult:
         """Query an order by client order ID."""
@@ -613,46 +637,62 @@ class OrderExecutor:
     # ----------------------------------------------------------------
 
     async def _signed_request(self, method: str, path: str, params: dict) -> dict | list:
-        """Send a signed request to the Binance API."""
-        params["timestamp"] = utc_timestamp_ms()
-        params["recvWindow"] = 5000
+        """Send a signed request to the Binance API with retry on transient errors."""
+        import asyncio as aio
+        RETRIABLE_CODES = {-1003, -1015, -1016, -1021}
+        MAX_RETRIES = 3
+        BASE_DELAY = 1.0
 
-        # Build signature
-        query = urllib.parse.urlencode(sorted(params.items()), quote_via=urllib.parse.quote)
-        signature = hmac.new(
-            self._api_secret.encode("utf-8"),
-            query.encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
-        query += f"&signature={signature}"
+        for attempt in range(MAX_RETRIES + 1):
+            params["timestamp"] = utc_timestamp_ms()
+            params["recvWindow"] = 5000
 
-        await self._rate_limiter.acquire_with_wait()
+            # Build signature
+            query = urllib.parse.urlencode(sorted(params.items()), quote_via=urllib.parse.quote)
+            signature = hmac.new(
+                self._api_secret.encode("utf-8"),
+                query.encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            query += f"&signature={signature}"
 
-        try:
-            if method == "GET":
-                resp = await self.client.get(f"{path}?{query}")
-            elif method == "POST":
-                resp = await self.client.post(f"{path}?{query}")
-            elif method == "DELETE":
-                resp = await self.client.delete(f"{path}?{query}")
-            else:
-                raise OrderError(f"Unsupported HTTP method: {method}")
-        except httpx.RequestError as exc:
-            raise OrderError(f"HTTP request failed: {exc}") from exc
+            await self._rate_limiter.acquire_with_wait()
 
-        data = resp.json()
-        if resp.status_code >= 400:
-            code = data.get("code", resp.status_code)
-            msg = data.get("msg", str(data))
+            try:
+                if method == "GET":
+                    resp = await self.client.get(f"{path}?{query}")
+                elif method == "POST":
+                    resp = await self.client.post(f"{path}?{query}")
+                elif method == "DELETE":
+                    resp = await self.client.delete(f"{path}?{query}")
+                else:
+                    raise OrderError(f"Unsupported HTTP method: {method}")
+            except httpx.RequestError as exc:
+                if attempt < MAX_RETRIES:
+                    delay = BASE_DELAY * (2 ** attempt)
+                    logger.warning(f"网络错误 (尝试 {attempt+1}/{MAX_RETRIES+1}): {exc}, {delay:.1f}s 后重试...")
+                    await aio.sleep(delay)
+                    continue
+                raise OrderError(f"HTTP request failed after {MAX_RETRIES+1} attempts: {exc}") from exc
 
-            if code == -2010:
-                raise InsufficientBalance(f"Insufficient balance: {msg}")
-            if code == -1015:
-                raise RateLimitExceeded(f"Rate limit exceeded: {msg}")
+            data = resp.json()
+            if resp.status_code >= 400:
+                code = data.get("code", resp.status_code)
+                msg = data.get("msg", str(data))
 
-            raise OrderError(f"Binance error [{code}]: {msg}")
+                if code == -2010:
+                    raise InsufficientBalance(f"Insufficient balance: {msg}")
+                if code in RETRIABLE_CODES and attempt < MAX_RETRIES:
+                    delay = BASE_DELAY * (2 ** attempt)
+                    logger.warning(f"Binance 瞬时错误 [{code}] (尝试 {attempt+1}/{MAX_RETRIES+1}): {msg}, {delay:.1f}s 后重试...")
+                    await aio.sleep(delay)
+                    continue
+                if code == -1015:
+                    raise RateLimitExceeded(f"Rate limit exceeded after retries: {msg}")
 
-        return data
+                raise OrderError(f"Binance error [{code}]: {msg}")
+
+            return data
 
     async def _load_exchange_info(self) -> None:
         """Fetch and cache exchange info (symbol filters)."""
@@ -666,6 +706,10 @@ class OrderExecutor:
                 self._symbol_info[sym] = parse_symbol_filters(s.get("filters", []))
 
         logger.info(f"已加载 {len(self._symbol_info)} 个交易对信息")
+
+    def get_symbol_filters(self, symbol: str) -> dict | None:
+        """公开方法: 获取币种的交易精度过滤器 (step_size, tick_size 等)."""
+        return self._symbol_info.get(symbol)
 
     # ----------------------------------------------------------------
     # Internal — URL selection

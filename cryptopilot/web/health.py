@@ -253,7 +253,8 @@ def create_health_app(
                 "by_symbol": list(by_symbol.values()),
             }
         except Exception as exc:
-            return {"error": str(exc)}
+            logger.exception("health endpoint failed")
+            return {"error": "Internal server error"}
 
     @app.get("/health/circuit")
     async def health_circuit():
@@ -449,7 +450,8 @@ def create_health_app(
                 "by_symbol": {k: round(v, 6) for k, v in sorted(by_symbol.items(), key=lambda x: -x[1])[:10]},
             }
         except Exception as exc:
-            return {"error": str(exc)}
+            logger.exception("health endpoint failed")
+            return {"error": "Internal server error"}
 
     @app.get("/health/trades")
     async def health_trades():
@@ -467,7 +469,8 @@ def create_health_app(
             """)
             return {"total": len(rows), "trades": [dict(r) for r in rows]}
         except Exception as exc:
-            return {"error": str(exc)}
+            logger.exception("health endpoint failed")
+            return {"error": "Internal server error"}
 
     @app.get("/health/signals")
     async def health_signals():

@@ -54,6 +54,7 @@ async def main() -> None:
     if need_rekey:
         if not env.binance_api_key or not env.binance_api_secret:
             logger.error("未找到 API 密钥，请在 .env 中设置 BINANCE_API_KEY 和 BINANCE_API_SECRET")
+            # 注意: 此时 db 尚未连接, 安全退出
             return
         encryptor.initialize(env.binance_api_key, env.binance_api_secret)
         logger.info(f"API 密钥已加密保存到 {KEY_FILE}")
@@ -99,7 +100,10 @@ async def main() -> None:
     proxy_url = None
     if cfg.proxy.enabled and cfg.proxy.https:
         proxy_url = cfg.proxy.https
-        logger.info(f"已启用代理: {proxy_url}")
+        from urllib.parse import urlparse
+        parsed = urlparse(proxy_url)
+        safe_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}" if parsed.hostname else "***"
+        logger.info(f"已启用代理: {safe_url}")
 
     # 读取数据源配置
     md_cfg = raw_cfg.get("market_data", {})
@@ -108,15 +112,17 @@ async def main() -> None:
 
     ws_manager = None
     use_rest_poller = False
+    ws_already_started = False
 
     if data_source == "rest":
         use_rest_poller = True
     elif data_source == "websocket":
-        pass  # use ws_manager
+        from cryptopilot.market.websocket_manager import BinanceWebSocketManager as BWM
+        ws_manager = BWM(cfg, data_cache)
     else:  # auto
         # 尝试 WebSocket, 10s 无数据则降级 REST
         from cryptopilot.market.websocket_manager import BinanceWebSocketManager as BWM
-        ws_manager = BinanceWebSocketManager(cfg, data_cache)
+        ws_manager = BWM(cfg, data_cache)
         ws_task_test = asyncio.create_task(ws_manager.start(), name="ws_test")
 
         logger.info("正在检测 WebSocket 连通性 (最多等待 10s)...")
@@ -128,6 +134,7 @@ async def main() -> None:
         ticker_count = len(data_cache.all_tickers())
         if ticker_count > 10:
             logger.info(f"WebSocket 正常: {ticker_count} 个币种已就绪")
+            ws_already_started = True
         else:
             logger.warning("WebSocket 无数据, 降级为 REST 轮询")
             use_rest_poller = True
@@ -136,7 +143,7 @@ async def main() -> None:
             try:
                 await ws_task_test
             except Exception:
-                pass
+                logger.debug("WS 测试任务取消失败", exc_info=True)
             ws_manager = None
 
     if use_rest_poller:
@@ -170,6 +177,9 @@ async def main() -> None:
 
     ws_trader: WSTradingClient | None = None
     user_data: UserDataStream | None = None
+    _user_data_task: asyncio.Task | None = None
+    history_sync_task: asyncio.Task | None = None
+    signal_processor_task: asyncio.Task | None = None
     ws_trader_connected = False
 
     try:
@@ -316,9 +326,7 @@ async def main() -> None:
                     if i.symbol and i.symbol not in symbols_to_sync:
                         symbols_to_sync.add(i.symbol)
             except Exception:
-                pass
-
-            # 从 DB 已有订单获取
+                logger.debug("income 币种收集跳过", exc_info=True)
             if not symbols_to_sync:
                 recent_orders = await order_repo.get_history(limit=50)
                 for o in recent_orders:
@@ -364,7 +372,7 @@ async def main() -> None:
                                 )
                                 total_fills += 1
                         except Exception:
-                            pass
+                            logger.debug(f"历史成交写入跳过 {t.symbol}", exc_info=True)
 
                     logger.debug(f"历史同步: {sym} {len(trades)} 笔成交")
                 except Exception:
@@ -380,7 +388,7 @@ async def main() -> None:
             logger.exception("历史数据同步异常 (非致命)")
 
     # 启动后台同步 (不阻塞)
-    asyncio.create_task(sync_trade_history(), name="history_sync")
+    history_sync_task = asyncio.create_task(sync_trade_history(), name="history_sync")
 
     # ---- 信号日志 (用于 Web 展示) ----
     from cryptopilot.web.health import add_signal_log
@@ -652,7 +660,7 @@ async def main() -> None:
             finally:
                 signal_queue.task_done()
 
-    asyncio.create_task(signal_processor())
+    signal_processor_task = asyncio.create_task(signal_processor(), name="signal_processor")
     logger.info("信号处理器已启动")
 
     # ---- Report Generator ----
@@ -854,14 +862,17 @@ async def main() -> None:
                     margin_ratio=acct.margin_ratio,
                 ))
             except Exception:
-                pass
+                logger.debug("账户快照写入失败", exc_info=True)
 
     snapshot_task = asyncio.create_task(account_snapshot_loop(), name="account_snapshot")
 
     daily_task = asyncio.create_task(daily_report_loop(), name="daily_report")
 
     # ---- Start all services ----
-    ws_task = asyncio.create_task(ws_manager.start(), name="rest_poller")
+    if ws_already_started:
+        ws_task = ws_task_test  # reuse already-started task
+    else:
+        ws_task = asyncio.create_task(ws_manager.start(), name="ws_manager")
     web_task = asyncio.create_task(uvicorn_server.serve(), name="health_web")
 
     logger.info(f"健康检查: http://{cfg.web.host}:{cfg.web.port}/health")
@@ -916,6 +927,22 @@ async def main() -> None:
     except (asyncio.CancelledError, Exception):
         pass
 
+    # 取消 history_sync 后台任务
+    if history_sync_task is not None:
+        history_sync_task.cancel()
+        try:
+            await history_sync_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    # 取消 signal_processor 任务
+    if signal_processor_task is not None:
+        signal_processor_task.cancel()
+        try:
+            await signal_processor_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
     # Stop scanning pipeline
     if scanner_obj:
         await scanner_obj.stop()
@@ -951,7 +978,7 @@ async def main() -> None:
     # Shutdown WS trading client + user data stream
     if user_data:
         await user_data.stop()
-    if '_user_data_task' in dir():
+    if _user_data_task is not None:
         _user_data_task.cancel()
         try:
             await _user_data_task
@@ -1038,9 +1065,9 @@ async def _execute_signal(
             await executor.set_leverage(signal.symbol, default_leverage)
             await executor.set_margin_type(signal.symbol, "ISOLATED")
         except Exception:
-            pass  # May already be set or not supported (spot)
+            logger.debug(f"杠杆/保证金设置跳过 {signal.symbol} (可能已设置或不支持)", exc_info=True)
 
-        stop_loss_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 2.0)
+        stop_loss_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 3.0)
         qty = position_sizer.calculate(
             balance=acct.available_balance,
             entry_price=entry_price,
@@ -1105,7 +1132,7 @@ async def _execute_signal(
                         logger.info(f"{signal.symbol} 已成交 @{actual_fill_price:.5f}")
                         break
                 except Exception:
-                    pass
+                    logger.debug(f"成交确认查询跳过 {signal.symbol} (attempt {attempt+1})", exc_info=True)
             else:
                 actual_fill_price = entry_price  # 兜底
                 logger.warning(f"{signal.symbol} 成交确认超时, 用信号价兜底")
@@ -1127,7 +1154,7 @@ async def _execute_signal(
                     reduce_only=True, position_side=pos_side,
                 ))
             except Exception:
-                pass
+                logger.debug("紧急平仓降级尝试失败", exc_info=True)
             return
 
         fill_price = actual_fill_price if actual_fill_price > 0 else entry_price
@@ -1188,7 +1215,7 @@ async def _execute_signal(
                 ]:
                     tp_qty = qty * tp_qty_ratio
                     # Precision clamping
-                    filters = executor._symbol_info.get(signal.symbol)
+                    filters = executor.get_symbol_filters(signal.symbol)
                     if filters:
                         tp_qty = clamp_qty(tp_qty, filters["step_size"],
                                           filters.get("min_qty", 0), filters["max_qty"])
@@ -1243,8 +1270,9 @@ async def _execute_signal(
             except Exception:
                 logger.exception(f"紧急平仓也失败: {signal.symbol}")
     else:
-        pnl = _calc_pnl(position_manager, signal.symbol, fill_price, qty)
-        notifier.position_closed(signal.symbol, pos_side, fill_price, pnl)
+        close_fill_price = result.avg_price if result.avg_price > 0 else 0.0
+        pnl = _calc_pnl(position_manager, signal.symbol, close_fill_price, qty)
+        notifier.position_closed(signal.symbol, pos_side, close_fill_price, pnl)
 
     logger.info(f"订单已执行: {result.status} {side} {qty} {signal.symbol} [id={result.order_id}]")
 
@@ -1283,7 +1311,7 @@ def _update_trailing_stops(signal, trailing_stops, executor, cache) -> None:
         logger.info(f"移动止损已更新 {signal.symbol}: ${new_stop:.4f}")
 
 
-async def _ws_to_order_result(raw: dict):
+def _ws_to_order_result(raw: dict):
     """将 WS 交易 API 返回的 dict 转为 OrderResult."""
     from cryptopilot.trading.order_executor import OrderResult
     return OrderResult(

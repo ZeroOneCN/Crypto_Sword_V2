@@ -159,6 +159,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <script>
 const REFRESH_MS = 5000;
 let countdown = REFRESH_MS / 1000;
+function esc(s) {
+  if (typeof s !== 'string') return s;
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
 function fmtUSD(v) {
   const n = parseFloat(v);
   if (isNaN(n)) return '--';
@@ -179,6 +185,11 @@ function cn(v, pos, neg) {
   const n = parseFloat(v);
   if (isNaN(n) || n === 0) return 'zero';
   return n > 0 ? (pos || 'pnl-pos') : (neg || 'pnl-neg');
+}
+// HTML 转义: 防止 XSS 注入
+function esc(s) {
+  if (typeof s !== 'string') s = String(s);
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 async function load() {
@@ -314,7 +325,7 @@ async function load() {
           ? '<span class="badge badge-ok">SL:' + prot.sl + ' TP:' + prot.tp + '</span>'
           : '<span class="badge badge-err" style="animation:pulse 1s infinite">裸仓!</span>';
         html += '<tr>' +
-          '<td><strong>' + p.symbol + '</strong></td>' +
+          '<td><strong>' + esc(p.symbol) + '</strong></td>' +
           '<td><span class="badge ' + (side === 'LONG' ? 'badge-long' : 'badge-short') + '">' + side + '</span></td>' +
           '<td>' + fmtNum(p.qty, 3) + '</td>' +
           '<td>' + fmtNum(p.entry_price, 5) + '</td>' +
@@ -369,12 +380,12 @@ async function load() {
         const strat = (t.strategy_name || t.type || '-');
         html += '<tr>' +
           '<td class="nowrap">' + tm + '</td>' +
-          '<td><strong>' + t.symbol + '</strong></td>' +
+          '<td><strong>' + esc(t.symbol) + '</strong></td>' +
           '<td><span class="badge ' + sideCls + '">' + side + '</span></td>' +
           '<td>' + fmtNum(t.price, 5) + '</td>' +
           '<td>' + fmtNum(t.qty, 4) + '</td>' +
           '<td>' + fmtNum(t.commission, 6) + '</td>' +
-          '<td class="truncate" title="' + (strat) + '">' + (strat.length > 15 ? strat.slice(0,15)+'..' : strat) + '</td>' +
+          '<td class="truncate" title="' + esc(strat) + '">' + (strat.length > 15 ? esc(strat.slice(0,15))+'..' : esc(strat)) + '</td>' +
           '</tr>';
       });
       html += '</table></div>';
@@ -394,7 +405,7 @@ async function load() {
       bars.forEach(b => {
         const h = Math.max(4, (Math.abs(b.pnl) / maxAbs * 70));
         const cls = b.pnl >= 0 ? 'daily-bar-pos' : 'daily-bar-neg';
-        html += '<div title="' + b.date + ': ' + fmtUSD(b.pnl) + ' (' + b.trades + '笔)" ' +
+        html += '<div title="' + esc(b.date) + ': ' + fmtUSD(b.pnl) + ' (' + b.trades + '笔)" ' +
           'class="daily-bar ' + cls + '" style="height:' + h + 'px;flex:0 0 12px;"></div>';
       });
       html += '</div><div style="font-size:0.65rem;color:#475569;margin-top:4px;text-align:center;">每日盈亏柱状图 (最近30天)</div>';
@@ -416,12 +427,12 @@ async function load() {
             let dotCls = 'factor-dot-neutral';
             if (f.direction === 'LONG') dotCls = 'factor-dot-long';
             else if (f.direction === 'SHORT') dotCls = 'factor-dot-short';
-            factorsHtml += '<span class="factor-dot ' + dotCls + '" title="' + f.name + ': ' + f.direction + ' [' + f.score + ']"></span>';
+            factorsHtml += '<span class="factor-dot ' + dotCls + '" title="' + esc(f.name) + ': ' + esc(f.direction) + ' [' + f.score + ']"></span>';
           });
         }
         factorsHtml += '</div>';
         html += '<tr>' +
-          '<td><strong style="color:#38bdf8">' + c.symbol + '</strong></td>' +
+          '<td><strong style="color:#38bdf8">' + esc(c.symbol) + '</strong></td>' +
           '<td>' + fmtNum(c.price, 4) + '</td>' +
           '<td class="' + changeCls + '">' + fmtPct(c.change_24h) + '</td>' +
           '<td><span class="badge badge-purple">' + c.scanner_score + '</span></td>' +
@@ -452,10 +463,10 @@ async function load() {
         const tm = s.time ? new Date(s.time).toLocaleTimeString() : '-';
         html += '<tr class="signal-row ' + (act.includes('LONG') ? 'LONG' : (act.includes('SHORT') ? 'SHORT' : 'HOLD')) + '">' +
           '<td class="nowrap">' + tm + '</td>' +
-          '<td><strong>' + s.symbol + '</strong></td>' +
-          '<td><span class="badge ' + actCls + '">' + act + '</span></td>' +
+          '<td><strong>' + esc(s.symbol) + '</strong></td>' +
+          '<td><span class="badge ' + actCls + '">' + esc(act) + '</span></td>' +
           '<td>' + (s.score || '-') + '</td>' +
-          '<td class="truncate" title="' + (s.detail || '') + '">' + (s.detail || '-') + '</td>' +
+          '<td class="truncate" title="' + esc(s.detail || '') + '">' + esc(s.detail || '-') + '</td>' +
           '</tr>';
       });
       html += '</table></div>';
