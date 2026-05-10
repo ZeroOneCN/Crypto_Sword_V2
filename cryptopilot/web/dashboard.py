@@ -293,18 +293,21 @@ async function load() {
     const r = await fetch('/health/pnl');
     const d = await r.json();
     if (!d.error) {
-      const pnl7 = d.realized_pnl_7d || 0;
-      const pnl30 = d.realized_pnl_30d || 0;
-      const pnlAll = d.total_realized_pnl || 0;
+      // net_pnl = realized_pnl + commission + funding (与 Binance 交易所显示一致)
+      const net7 = d.net_pnl_7d || 0;
+      const net30 = d.net_pnl_30d || 0;
+      const netTotal = d.net_pnl_total || 0;
+      const net1d = d.net_pnl_1d || 0;
       document.getElementById('report').innerHTML =
-        '<div class="inline-stat"><span>7天盈亏</span><span class="' + cn(pnl7) + '">' + fmtUSD(pnl7) + '</span></div>' +
-        '<div class="inline-stat"><span>30天盈亏</span><span class="' + cn(pnl30) + '">' + fmtUSD(pnl30) + '</span></div>' +
-        '<div class="inline-stat"><span>累计盈亏</span><span class="' + cn(pnlAll) + '">' + fmtUSD(pnlAll) + '</span></div>' +
-        '<div class="inline-stat"><span>7天手续费</span><span>' + fmtUSD(d.commission_7d || 0) + '</span></div>' +
-        '<div class="inline-stat"><span>7天资金费率</span><span>' + fmtUSD(d.funding_7d || 0) + '</span></div>' +
-        '<div class="inline-stat"><span>今日盈亏</span><span class="' + cn(d.realized_pnl_1d || 0) + '">' + fmtUSD(d.realized_pnl_1d || 0) + '</span></div>' +
-        '<div class="inline-stat"><span>交易币种(30d)</span><span>' + (d.symbols_traded || 0) + '</span></div>';
-      document.getElementById('hint_perf').textContent = 'Binance 权威数据';
+        '<div class="inline-stat"><span>7天净盈亏</span><span class="' + cn(net7) + ' value-big">' + fmtUSD(net7) + '</span></div>' +
+        '<div class="inline-stat"><span>30天净盈亏</span><span class="' + cn(net30) + ' value-big">' + fmtUSD(net30) + '</span></div>' +
+        '<div class="inline-stat"><span>累计净盈亏</span><span class="' + cn(netTotal) + ' value-big">' + fmtUSD(netTotal) + '</span></div>' +
+        '<div class="inline-stat"><span>今日净盈亏</span><span class="' + cn(net1d) + ' value-big">' + fmtUSD(net1d) + '</span></div>' +
+        '<div class="inline-stat"><span>手续费</span><span>' + fmtUSD(d.commission_7d || 0) + '</span></div>' +
+        '<div class="inline-stat"><span>资金费率</span><span>' + fmtUSD(d.funding_7d || 0) + '</span></div>' +
+        '<div class="inline-stat"><span>交易币种</span><span>' + (d.symbols_traded || 0) + '</span></div>' +
+        '<div class="inline-stat" style="font-size:0.65rem;color:#475569;"><span>拉取记录</span><span>' + (d.total_events || 0) + ' 条</span></div>';
+      document.getElementById('hint_perf').textContent = '含手续费+资金费率';
     }
   } catch(e) {}
 
