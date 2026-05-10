@@ -544,20 +544,20 @@ def create_health_app(
                 if not target_symbol:
                     target_symbol = "BTCUSDT"
 
-            # 取当前价
+            # 取当前价 — 优先 REST API (更可靠)
             price = 0.0
-            if cache is not None:
-                try:
-                    tick = cache.get_ticker(target_symbol)
-                    if tick:
-                        price = tick.last_price
-                except Exception:
-                    pass
-            if price <= 0 and order_executor is not None:
+            if order_executor is not None:
                 try:
                     tick = await order_executor.get_ticker_price(target_symbol)
                     if tick:
-                        price = tick
+                        price = float(tick)
+                except Exception:
+                    pass
+            if price <= 0 and cache is not None:
+                try:
+                    t = cache.get_ticker(target_symbol)
+                    if t:
+                        price = t.last_price
                 except Exception:
                     pass
 
