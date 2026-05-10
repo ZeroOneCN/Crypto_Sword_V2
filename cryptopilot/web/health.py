@@ -635,6 +635,42 @@ def create_health_app(
             })
         return {"candidates": result, "preset": preset_name}
 
+    @app.get("/health/logs")
+    async def health_logs(lines: int = 50):
+        """返回最近 N 行日志 (供仪表盘实时监控)."""
+        import glob, os
+        log_pattern = os.path.join(
+            os.path.dirname(__file__), "..", "..", "data", "logs", "cryptopilot_*.log"
+        )
+        log_files = sorted(glob.glob(os.path.abspath(log_pattern)), reverse=True)
+        if not log_files:
+            return {"lines": [], "message": "无日志文件"}
+        try:
+            with open(log_files[0], "r") as f:
+                all_lines = f.readlines()
+            recent = all_lines[-lines:]
+            # 解析日志格式: 时间 | 级别 | 模块:函数:行号 | 消息
+            parsed = []
+            for line in recent:
+                line = line.rstrip("\n")
+                # 简化为前端友好格式: 去掉冗长模块路径
+                if " | " in line:
+                    parts = line.split(" | ", 3)
+                    if len(parts) >= 4:
+                        # parts[0]=时间, parts[1]=级别, parts[2]=位置, parts[3]=消息
+                        level = parts[1].strip()
+                        msg = parts[3]
+                        # 简短时间
+                        ts = parts[0].split(" ")[-1].split(".")[0] if " " in parts[0] else parts[0][:8]
+                        parsed.append({"time": ts, "level": level, "msg": msg})
+                    else:
+                        parsed.append({"time": "", "level": "INFO", "msg": line})
+                else:
+                    parsed.append({"time": "", "level": "INFO", "msg": line})
+            return {"lines": parsed, "file": os.path.basename(log_files[0])}
+        except Exception as e:
+            return {"lines": [], "error": str(e)}
+
     @app.exception_handler(Exception)
     async def generic_handler(request, exc):
         return JSONResponse(

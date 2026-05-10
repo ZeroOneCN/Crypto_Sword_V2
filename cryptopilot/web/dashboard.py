@@ -16,43 +16,49 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0f1a;color:#c9d1d9;padding:16px 22px;min-height:100vh}
   h1{font-size:1.5rem;margin-bottom:12px;color:#58a6ff;display:flex;align-items:center;gap:10px}
-  h1 small{font-size:.65rem;color:#484f58;font-weight:400;margin-left:auto}
+  h1 small{font-size:.75rem;color:#484f58;font-weight:400;margin-left:auto}
   .top-bar{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap}
   .stat-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:10px 14px;flex:1;min-width:120px;text-align:center;transition:border-color .2s}
   .stat-card:hover{border-color:#30363d}
-  .stat-card .label{font-size:.65rem;color:#8b949e;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px}
+  .stat-card .label{font-size:.75rem;color:#8b949e;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px}
   .stat-card .value{font-size:1.6rem;font-weight:700}
-  .stat-card .sub{font-size:.62rem;color:#484f58;margin-top:2px}
+  .stat-card .sub{font-size:.7rem;color:#484f58;margin-top:2px}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:12px;margin-bottom:12px}
   .card{background:#161b22;border-radius:8px;padding:12px;border:1px solid #21262d}
   .card h2{font-size:.9rem;color:#8b949e;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #21262d;padding-bottom:7px}
-  .card h2 .hint{font-weight:400;font-size:.65rem;color:#484f58}
-  .badge{display:inline-block;padding:2px 7px;border-radius:3px;font-size:.65rem;font-weight:600}
+  .card h2 .hint{font-weight:400;font-size:.75rem;color:#484f58}
+  .badge{display:inline-block;padding:2px 7px;border-radius:3px;font-size:.75rem;font-weight:600}
   .badge-ok{background:#0d3322;color:#3fb950}.badge-warn{background:#3b2200;color:#d2991d}
   .badge-err{background:#3b1015;color:#f85149}.badge-info{background:#1a2b4c;color:#79c0ff}
   .badge-long{background:#0d3322;color:#3fb950}.badge-short{background:#3b1015;color:#f85149}
   .badge-purple{background:#2d1140;color:#d2a8ff}.badge-teal{background:#0d2e2e;color:#39d2c0}
   table{width:100%;border-collapse:collapse;font-size:.85rem}
   th,td{padding:5px 7px;text-align:left;border-bottom:1px solid #1a1f2b}
-  th{color:#8b949e;font-weight:600;font-size:.68rem;text-transform:uppercase}
+  th{color:#8b949e;font-weight:600;font-size:.78rem;text-transform:uppercase}
   tr:hover td{background:#1c212950}
   .pnl-pos{color:#3fb950}.pnl-neg{color:#f85149}.zero{color:#484f58}
-  .footer{display:flex;justify-content:space-between;align-items:center;font-size:.63rem;color:#30363d;margin-top:6px}
+  .footer{display:flex;justify-content:space-between;align-items:center;font-size:.72rem;color:#30363d;margin-top:6px}
   .footer .refresh{color:#58a6ff;cursor:pointer}
   .error{color:#f85149;font-size:.75rem}
-  .scroll-table{overflow-x:auto;max-height:400px;overflow-y:auto}
+  .scroll-table{overflow-x:auto;max-height:500px;overflow-y:auto}
   .conn-dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px}
   .conn-dot.ok{background:#3fb950}.conn-dot.err{background:#f85149}
   .conn-dot.warn{background:#d2991d}.conn-dot.pulse{animation:pulse 2s ease-in-out infinite}
   .nowrap{white-space:nowrap}.truncate{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .value-big{font-size:1.05rem;font-weight:700}
+  .value-big{font-size:1.2rem;font-weight:700}
   .inline-stat{display:flex;justify-content:space-between;padding:3px 0;font-size:.75rem}
   .inline-stat span:last-child{font-weight:600}
   .daily-bar{display:inline-block;height:20px;min-width:2px;border-radius:2px;margin:0 1px}
   .daily-bar-pos{background:#3fb950}.daily-bar-neg{background:#f85149}
+  #log_panel{background:#0d1117;border:1px solid #21262d;border-radius:8px;margin-top:12px;padding:10px}
+  #log_panel h2{margin-bottom:6px}
+  #log_lines{font-family:'Cascadia Code','Fira Code',monospace;font-size:.7rem;line-height:1.5;max-height:300px;overflow-y:auto;color:#8b949e;background:#0a0f14;border-radius:4px;padding:6px 8px}
+  .log-line{white-space:nowrap;padding:1px 0}.log-line .lt{color:#484f58;margin-right:6px}
+  .log-INFO{color:#8b949e}.log-WARNING{color:#d2991d}.log-ERROR{color:#f85149}.log-DEBUG{color:#484f58}
+  .log-SUCCESS{color:#3fb950}
   .tag{margin:1px 2px;display:inline-block}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-  .label-tag{font-size:.62rem;color:#8b949e;background:#21262d;padding:1px 5px;border-radius:3px;margin-right:3px}
+  .label-tag{font-size:.7rem;color:#8b949e;background:#21262d;padding:1px 5px;border-radius:3px;margin-right:3px}
 </style>
 </head>
 <body>
@@ -126,6 +132,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div id="daily_pnl"><p style="text-align:center;padding:18px;color:#484f58;">等待数据...</p></div>
   </div>
 </div>
+
+<div id="log_panel">
+    <h2>📋 服务器日志 <span class="hint" id="hint_log"></span></h2>
+    <div id="log_lines"><p style="text-align:center;color:#484f58;">加载中...</p></div>
+  </div>
 
 <div class="footer">
   <span>CryptoPilot V2 · 多因子评分引擎</span>
@@ -361,7 +372,7 @@ async function load(){
         const h=Math.max(4,(Math.abs(b.pnl)/maxAbs*70));
         html+='<div title="'+esc(b.date)+': '+fmtUSD(b.pnl)+' ('+b.trades+'笔)" class="daily-bar '+(b.pnl>=0?'daily-bar-pos':'daily-bar-neg')+'" style="height:'+h+'px;flex:0 0 12px"></div>';
       });
-      html+='</div><div style="font-size:.62rem;color:#484f58;margin-top:4px;text-align:center">30天盈亏柱状图</div>';
+      html+='</div><div style="font-size:.7rem;color:#484f58;margin-top:4px;text-align:center">30天盈亏柱状图</div>';
       document.getElementById('daily_pnl').innerHTML=html;
     }
   }catch(e){}
