@@ -49,8 +49,8 @@ web:
 scoring:
   # 当前启用的预设 (chase / composite / ambush)
   active_preset: composite
-  buy_threshold: 55
-  sell_threshold: -55
+  buy_threshold: 45
+  sell_threshold: -45
   min_confidence: 0.65
 
   presets:
@@ -66,8 +66,8 @@ scoring:
 
     # ---- 📊 综合 (Composite): 四维均衡评分 ----
     composite:
-      buy_threshold: 55      # 高阈值, 只有强信号才开仓
-      sell_threshold: -55
+      buy_threshold: 45
+      sell_threshold: -45
       factors:
         - { name: funding, weight: 0.12 }           # 🧊 费率
         - { name: market_cap, weight: 0.12 }         # 💎 市值
