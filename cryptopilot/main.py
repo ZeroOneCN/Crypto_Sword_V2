@@ -598,7 +598,7 @@ async def main() -> None:
         positions = position_manager.get_all_positions()
         if not positions:
             return "📭 当前无持仓"
-        lines = [f"📊 **持仓明细** ({len(positions)} 个)\n"]
+        lines = [f"📊 <b>持仓明细</b> ({len(positions)} 个)\n"]
         for p in positions:
             sym = p.get("symbol", "?")
             side = "📈 LONG" if p.get("side") == "LONG" else "📉 SHORT"
@@ -610,7 +610,7 @@ async def main() -> None:
             if side == "📉 SHORT":
                 roi = -roi
             lines.append(
-                f"**{sym}** {side}  {qty}张\n"
+                f"<b>{sym}</b> {side}  {qty}\n"
                 f"  入场: {entry:.5f} | 标记: {mark:.5f}\n"
                 f"  浮动: ${pnl:+.2f} ({roi:+.2f}%)"
             )
@@ -1249,24 +1249,36 @@ async def _execute_signal(
         _execute_signal._position_open_time = getattr(_execute_signal, '_position_open_time', {})
         _execute_signal._position_open_time[signal.symbol] = time.time()
 
-        # ---- Place Take-Profit orders (LIMIT, 交易所挂单) ----
-        # 注意: STOP_MARKET 已被 Binance 禁用, SL 改由 exit_manager 本地跟踪
-        sl_success = True  # 本地模式始终为 True
+        # ---- Place Take-Profit orders (LIMIT, 交易所挂单) + SL via ALGO ORDER ----
+        sl_success = False
         sl_price = 0.0
-        tp_count = 0
-        try:
-            # 计算 SL 价格 (仅用于本地跟踪, 不挂交易所单)
+        if fill_price > 0:
             risk = risk_config or {}
             sl_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 3.0)
-            if fill_price > 0:
-                if pos_side == "LONG":
-                    sl_price = fill_price * (1 - sl_pct / 100)
-                else:
-                    sl_price = fill_price * (1 + sl_pct / 100)
+            if pos_side == "LONG":
+                sl_price = fill_price * (1 - sl_pct / 100)
+            else:
+                sl_price = fill_price * (1 + sl_pct / 100)
 
-            # SL 价格仅记录 (后续由行情监控线程触发平仓)
             if sl_price > 0:
-                logger.info(f"SL 已记录: {signal.symbol} @{sl_price:.5f} ({sl_pct}% 本地跟踪)")
+                try:
+                    sl_req = OrderRequest(
+                        symbol=signal.symbol,
+                        side="SELL" if pos_side == "LONG" else "BUY",
+                        order_type="STOP_MARKET",
+                        quantity=qty,
+                        stop_price=sl_price,
+                        reduce_only=True,
+                        position_side=pos_side,
+                        client_order_id=_make_client_id("sl"),
+                    )
+                    sl_r = await executor.create_algo_order(sl_req)
+                    sl_success = sl_r.order_id > 0
+                    logger.info(f"SL 已挂单: {signal.symbol} @{sl_price:.5f} algoId={sl_r.order_id}")
+                except Exception as exc:
+                    logger.error(f"SL 挂单失败: {signal.symbol} {exc}")
+        tp_count = 0
+        try:
 
             # 精确计算 TP 价格
             risk = risk_config or {}

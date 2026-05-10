@@ -149,6 +149,7 @@ class TelegramBot:
             await self._app.bot.send_message(
                 chat_id=self._chat_id,
                 text=text[:4096],
+                parse_mode='HTML',
             )
         except Exception:
             logger.warning(f"Telegram 发送失败: {text[:100]}")
@@ -206,34 +207,34 @@ class TelegramBot:
         side_emoji = "📈" if data.symbol else ""
         
         # 标题行
-        parts.append(f"{emoji} **CryptoPilot · 开仓**")
+        parts.append(f"{emoji} <b>CryptoPilot · 开仓</b>")
         parts.append(f"")
-        parts.append(f"**{data.symbol}** · {self._side_label(data)} · {data.leverage}x · {self._margin_label(data.margin_type)}")
+        parts.append(f"<b>{data.symbol}</b> · {self._side_label(data)} · {data.leverage}x · {self._margin_label(data.margin_type)}")
         parts.append(f"")
         
         # 成交信息
-        parts.append(f"💰 入场: `{data.price:.5f}`")
-        parts.append(f"📦 数量: `{data.quantity}` 张")
+        parts.append(f"💰 入场: <code>{data.price:.5f}</code>")
+        parts.append(f"📦 数量: <code>{data.quantity}</code>")
         if data.leverage:
-            parts.append(f"⚡ 杠杆: `{data.leverage}x`")
+            parts.append(f"⚡ 杠杆: <code>{data.leverage}x</code>")
         
         # V2 特色: 多因子评分
         if data.score > 0:
             score_bar = self._score_bar(data.score)
             parts.append(f"")
-            parts.append(f"🎯 综合评分: `{data.score:.0f}` {score_bar}")
+            parts.append(f"🎯 综合评分: <code>{data.score:.0f}</code> {score_bar}")
             if data.top_factors:
                 factors = " · ".join(data.top_factors[:3])
                 parts.append(f"📊 因子贡献: {factors}")
         
         # 保护单
         parts.append(f"")
-        parts.append(f"🛡️ **保护单:**")
+        parts.append(f"🛡️ <b>保护单:</b>")
         if data.sl_price > 0:
             sl_pct = abs(data.sl_price - data.price) / data.price * 100
-            parts.append(f"  🛑 SL: `{data.sl_price:.5f}` (-{sl_pct:.1f}%)")
+            parts.append(f"  🛑 SL: <code>{data.sl_price:.5f}</code> (-{sl_pct:.1f}%)")
         for t in data.tp_tiers:
-            parts.append(f"  🎯 TP{t['tier']}: `{t['price']:.5f}` (+{t['pct']}% · {int(t['qty_ratio']*100)}%仓位)")
+            parts.append(f"  🎯 TP{t['tier']}: <code>{t['price']:.5f}</code> (+{t['pct']}% · {int(t['qty_ratio']*100)}%仓位)")
 
         return "\n".join(parts)
 
@@ -242,45 +243,45 @@ class TelegramBot:
         pnl_emoji = "🟢" if data.pnl >= 0 else "🔴"
         parts = []
         
-        parts.append(f"{pnl_emoji} **CryptoPilot · 平仓**")
+        parts.append(f"{pnl_emoji} <b>CryptoPilot · 平仓</b>")
         parts.append(f"")
-        parts.append(f"**{data.symbol}** · {self._exit_reason_label(data.exit_reason)}")
+        parts.append(f"<b>{data.symbol}</b> · {self._exit_reason_label(data.exit_reason)}")
         parts.append(f"")
-        parts.append(f"💵 平仓价: `{data.exit_price:.5f}`")
-        parts.append(f"💰 盈亏: `{_fmt_pnl(data.pnl)}`")
+        parts.append(f"💵 平仓价: <code>{data.exit_price:.5f}</code>")
+        parts.append(f"💰 盈亏: <code>{_fmt_pnl(data.pnl)}</code>")
         if data.pnl_pct != 0:
-            parts.append(f"📊 收益率: `{data.pnl_pct:+.2f}%`")
+            parts.append(f"📊 收益率: <code>{data.pnl_pct:+.2f}%</code>")
         if data.hold_duration:
-            parts.append(f"⏱️ 持仓: `{data.hold_duration}`")
+            parts.append(f"⏱️ 持仓: <code>{data.hold_duration}</code>")
 
         return "\n".join(parts)
 
     def _fmt_protection_placed(self, data: EventData) -> str:
         """保护单放置通知."""
-        parts = [f"🛡️ **保护单就绪 · {data.symbol}**", ""]
+        parts = [f"🛡️ <b>保护单就绪 · {data.symbol}</b>", ""]
         if data.sl_price > 0:
-            parts.append(f"🛑 SL: `{data.sl_price:.5f}`")
+            parts.append(f"🛑 SL: <code>{data.sl_price:.5f}</code>")
         for t in data.tp_tiers:
-            parts.append(f"🎯 TP{t['tier']}: `{t['price']:.5f}` (+{t['pct']}% · {int(t['qty_ratio']*100)}%仓位)")
+            parts.append(f"🎯 TP{t['tier']}: <code>{t['price']:.5f}</code> (+{t['pct']}% · {int(t['qty_ratio']*100)}%仓位)")
         return "\n".join(parts)
 
     def _fmt_tp_triggered(self, data: EventData) -> str:
         """TP触发通知."""
         return (
-            f"🎯 **TP{data.extra.get('tier', '?')} 触发 · {data.symbol}**\n"
+            f"🎯 <b>TP{data.extra.get('tier', '?')} 触发 · {data.symbol}</b>\n"
             f"\n"
-            f"💵 触发价: `{data.exit_price:.5f}`\n"
-            f"💰 已实现: `{_fmt_pnl(data.pnl)}`\n"
-            f"📦 剩余仓位: `{data.extra.get('remaining_qty', 0)}` 张"
+            f"💵 触发价: <code>{data.exit_price:.5f}</code>\n"
+            f"💰 已实现: <code>{_fmt_pnl(data.pnl)}</code>\n"
+            f"📦 剩余仓位: <code>{data.extra.get('remaining_qty', 0)}</code>"
         )
 
     def _fmt_sl_triggered(self, data: EventData) -> str:
         """止损触发通知."""
         return (
-            f"🛑 **止损触发 · {data.symbol}**\n"
+            f"🛑 <b>止损触发 · {data.symbol}</b>\n"
             f"\n"
-            f"💵 触发价: `{data.exit_price:.5f}`\n"
-            f"💰 亏损: `{_fmt_pnl(data.pnl)}` ({data.pnl_pct:+.2f}%)"
+            f"💵 触发价: <code>{data.exit_price:.5f}</code>\n"
+            f"💰 亏损: <code>{_fmt_pnl(data.pnl)}</code> ({data.pnl_pct:+.2f}%)"
         )
 
     # ================================================================

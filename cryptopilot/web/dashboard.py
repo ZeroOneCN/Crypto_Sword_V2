@@ -14,25 +14,25 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <title>CryptoPilot V2 · 驾驶舱</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0f1a;color:#c9d1d9;padding:14px 18px;min-height:100vh}
-  h1{font-size:1.25rem;margin-bottom:12px;color:#58a6ff;display:flex;align-items:center;gap:10px}
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0f1a;color:#c9d1d9;padding:16px 22px;min-height:100vh}
+  h1{font-size:1.5rem;margin-bottom:12px;color:#58a6ff;display:flex;align-items:center;gap:10px}
   h1 small{font-size:.65rem;color:#484f58;font-weight:400;margin-left:auto}
   .top-bar{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap}
   .stat-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:10px 14px;flex:1;min-width:120px;text-align:center;transition:border-color .2s}
   .stat-card:hover{border-color:#30363d}
   .stat-card .label{font-size:.65rem;color:#8b949e;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px}
-  .stat-card .value{font-size:1.3rem;font-weight:700}
+  .stat-card .value{font-size:1.6rem;font-weight:700}
   .stat-card .sub{font-size:.62rem;color:#484f58;margin-top:2px}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:12px;margin-bottom:12px}
   .card{background:#161b22;border-radius:8px;padding:12px;border:1px solid #21262d}
-  .card h2{font-size:.78rem;color:#8b949e;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #21262d;padding-bottom:7px}
+  .card h2{font-size:.9rem;color:#8b949e;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #21262d;padding-bottom:7px}
   .card h2 .hint{font-weight:400;font-size:.65rem;color:#484f58}
   .badge{display:inline-block;padding:2px 7px;border-radius:3px;font-size:.65rem;font-weight:600}
   .badge-ok{background:#0d3322;color:#3fb950}.badge-warn{background:#3b2200;color:#d2991d}
   .badge-err{background:#3b1015;color:#f85149}.badge-info{background:#1a2b4c;color:#79c0ff}
   .badge-long{background:#0d3322;color:#3fb950}.badge-short{background:#3b1015;color:#f85149}
   .badge-purple{background:#2d1140;color:#d2a8ff}.badge-teal{background:#0d2e2e;color:#39d2c0}
-  table{width:100%;border-collapse:collapse;font-size:.73rem}
+  table{width:100%;border-collapse:collapse;font-size:.85rem}
   th,td{padding:5px 7px;text-align:left;border-bottom:1px solid #1a1f2b}
   th{color:#8b949e;font-weight:600;font-size:.68rem;text-transform:uppercase}
   tr:hover td{background:#1c212950}
@@ -40,7 +40,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .footer{display:flex;justify-content:space-between;align-items:center;font-size:.63rem;color:#30363d;margin-top:6px}
   .footer .refresh{color:#58a6ff;cursor:pointer}
   .error{color:#f85149;font-size:.75rem}
-  .scroll-table{overflow-x:auto;max-height:260px;overflow-y:auto}
+  .scroll-table{overflow-x:auto;max-height:400px;overflow-y:auto}
   .conn-dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px}
   .conn-dot.ok{background:#3fb950}.conn-dot.err{background:#f85149}
   .conn-dot.warn{background:#d2991d}.conn-dot.pulse{animation:pulse 2s ease-in-out infinite}
@@ -165,10 +165,19 @@ async function load(){
     }
   }catch(e){}
 
-  // Positions count
+  // Positions count (with forced refresh on close)
   try{
     const r=await fetch('/health/positions?_='+Date.now());const d=await r.json();
-    if(!d.error)document.getElementById('stat_poscount').textContent=d.count+' / '+(window.maxPositions||5);
+    if(!d.error){
+      const newCount=d.count||0;
+      const oldCount=window._lastPosCount;
+      window._lastPosCount=newCount;
+      document.getElementById('stat_poscount').textContent=newCount+' / '+(window.maxPositions||5);
+      // 平仓时强制立即刷新持仓详情
+      if(oldCount!==undefined && newCount < oldCount){
+        setTimeout(load, 300);
+      }
+    }
   }catch(e){}
 
   // System + Strategy

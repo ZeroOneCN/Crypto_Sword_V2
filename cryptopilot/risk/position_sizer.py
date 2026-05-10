@@ -49,7 +49,7 @@ class PositionSizer:
         # Risk-based quantity
         if stop_loss_pct > 0:
             stop_distance = entry_price * stop_loss_pct / 100
-            risk_amount = balance * 1.0 / 100  # 1% account risk per trade
+            risk_amount = balance * 2.0 / 100  # 2% account risk per trade (aggressive altcoin)
             risk_qty = risk_amount / stop_distance * lev
         else:
             risk_qty = max_qty

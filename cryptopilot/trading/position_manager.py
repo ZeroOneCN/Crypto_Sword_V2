@@ -42,9 +42,9 @@ class PositionManager:
             if row:
                 self._positions[sym] = row
 
-        # Remove positions that are no longer open
+        # Remove positions that are no longer open on exchange
         for sym in list(self._positions.keys()):
-            if sym not in active_symbols and self._positions[sym].get("qty", 0) == 0:
+            if sym not in active_symbols:
                 await self._repo.delete(sym, self._positions[sym].get("side", ""))
                 self._positions.pop(sym, None)
 

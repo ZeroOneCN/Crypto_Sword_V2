@@ -441,6 +441,62 @@ class OrderExecutor:
             take_profit_price=take_profit_price,
         )
 
+    async def create_algo_order(self, req: OrderRequest) -> OrderResult:
+        """Submit an ALGO order (CONDITIONAL) via REST /fapi/v1/algo/order.
+
+        Used for STOP_MARKET / TAKE_PROFIT_MARKET stop-loss placements
+        that Binance requires to go through the algo order endpoint.
+        """
+        filters = self._symbol_info.get(req.symbol)
+        if filters:
+            step = filters["step_size"]
+            tick = filters["tick_size"]
+            req = OrderRequest(
+                symbol=req.symbol,
+                side=req.side,
+                order_type=req.order_type,
+                quantity=clamp_qty(req.quantity, step, filters.get("min_qty", 0), filters["max_qty"]),
+                stop_price=clamp_price(req.stop_price, tick) if req.stop_price else 0.0,
+                reduce_only=req.reduce_only,
+                position_side=req.position_side,
+                client_order_id=req.client_order_id or _make_client_id(),
+            )
+        params: dict = {
+            "symbol": req.symbol,
+            "side": req.side,
+            "type": req.order_type,
+            "quantity": str(req.quantity),
+            "algoType": "CONDITIONAL",
+            "newOrderRespType": "RESULT",
+        }
+        if req.position_side and req.position_side != "BOTH":
+            params["positionSide"] = req.position_side
+        if req.stop_price > 0:
+            params["stopPrice"] = str(req.stop_price)
+            params["workingType"] = "MARK_PRICE"
+        if req.reduce_only:
+            params["reduceOnly"] = "true"
+        raw = await self._signed_request("POST", "/fapi/v1/algo/order", params)
+        result = OrderResult(
+            symbol=raw.get("symbol", req.symbol),
+            order_id=int(raw.get("algoId", raw.get("orderId", 0))),
+            client_order_id=raw.get("clientAlgoId", req.client_order_id),
+            price=float(raw.get("price", 0) or 0),
+            orig_qty=float(raw.get("origQty", req.quantity)),
+            executed_qty=float(raw.get("executedQty", 0)),
+            status=raw.get("algoStatus", raw.get("status", "NEW")),
+            side=raw.get("side", req.side),
+            order_type=raw.get("type", req.order_type),
+            position_side=raw.get("positionSide", req.position_side),
+            avg_price=float(raw.get("avgPrice", 0) or 0),
+            update_time=raw.get("updateTime", 0),
+        )
+        logger.info(
+            f"Algo订单已提交: {req.symbol} {req.order_type} @{req.stop_price} "
+            f"qty={req.quantity} id={result.order_id}"
+        )
+        return result
+
     async def create_three_tier_tp(
         self,
         symbol: str,

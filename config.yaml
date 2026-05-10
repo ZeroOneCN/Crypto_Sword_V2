@@ -21,9 +21,9 @@ market_data:
 risk:
   max_daily_loss_pct: 2.0    # Stop all trading if daily PnL drops below -2%
   max_positions: 5           # Maximum concurrent positions across all strategies
-  max_position_pct: 20       # Max single position size as % of account
+  max_position_pct: 30       # Max single position size as % of account
   max_leverage: 10           # Hard cap on leverage
-  default_leverage: 3        # Default leverage per strategy
+  default_leverage: 5        # Default leverage per strategy
 
 order:
   default_type: market       # market or limit
@@ -48,8 +48,8 @@ web:
 # 三套预设: 追多(chase) / 综合(composite) / 埋伏(ambush)
 scoring:
   # 当前启用的预设 (chase / composite / ambush)
-  active_preset: composite
-  buy_threshold: 45
+  active_preset: ambush
+  buy_threshold: 50
   sell_threshold: -45
   min_confidence: 0.65
 
