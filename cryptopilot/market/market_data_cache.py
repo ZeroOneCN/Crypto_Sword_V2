@@ -70,7 +70,7 @@ class MarketDataCache:
                 if not self._ticker_logged and len(self._tickers) > 10:
                     self._ticker_logged = True
                     from loguru import logger
-                    logger.info(f"行情数据已就绪: {len(self._tickers)} 个币种 (来自 WS)")
+                    logger.info(f"行情数据已就绪: {len(self._tickers)} 个币种")
             elif isinstance(data, KlineData):
                 sym = data.symbol
                 interval = data.interval

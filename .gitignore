@@ -2,6 +2,9 @@
 .env
 data/keys.enc
 
+.claude
+.gitignore
+
 # Database
 data/*.db
 data/*.db-journal

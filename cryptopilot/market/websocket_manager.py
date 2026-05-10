@@ -157,27 +157,16 @@ class BinanceWebSocketManager:
 
     async def _listen(self) -> None:
         """Read messages from the WebSocket and dispatch to cache."""
-        msg_count = 0
-        while self._running and self._ws and (self._ws.close_code is None):
+        while self._running and self._ws and self._ws.close_code is None:
             try:
                 raw = await asyncio.wait_for(self._ws.recv(), timeout=60)
             except asyncio.TimeoutError:
                 continue
 
-            msg_count += 1
-            # 前 3 条打印原始内容用于诊断
-            if msg_count <= 3:
-                preview = raw[:300] if isinstance(raw, str) else raw[:300].decode(errors='replace')
-                logger.info(f"[WS #{msg_count}] {preview}")
-
             messages = self._parse_message(raw)
             for msg in messages:
                 if msg is not None:
                     await self._cache.update(msg)
-
-            if msg_count == 3:
-                ticker_count = len(self._cache.all_tickers()) if hasattr(self._cache, 'all_tickers') else '?'
-                logger.info(f"[WS] 前 3 条消息已处理, 缓存行情={ticker_count}币种")
 
     def _parse_message(self, raw: str | bytes) -> list[StreamMessage | None]:
         """Parse a raw WebSocket message into typed StreamMessages."""
@@ -187,21 +176,6 @@ class BinanceWebSocketManager:
             logger.warning(f"WebSocket 收到无效 JSON: {raw[:200]}")
             return []
 
-        # 诊断: 打印前 5 条消息的类型
-        if not hasattr(self, '_msg_debug_count'):
-            self._msg_debug_count = 0
-        if self._msg_debug_count < 5:
-            self._msg_debug_count += 1
-            if "stream" in data:
-                s = data["stream"]
-                d = data["data"]
-                d_type = type(d).__name__
-                d_len = len(d) if isinstance(d, (list, dict)) else "-"
-                logger.info(f"[DEBUG #{self._msg_debug_count}] stream={s}, data_type={d_type}, data_len={d_len}")
-            else:
-                logger.info(f"[DEBUG #{self._msg_debug_count}] raw keys={list(data.keys())[:5]}, e={data.get('e','?')}")
-
-        # Combined stream response: {"stream": "...", "data": {...}}
         if "stream" in data:
             stream_name = data["stream"]
             payload = data["data"]

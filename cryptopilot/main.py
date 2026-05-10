@@ -80,10 +80,16 @@ async def main() -> None:
     account_repo = AccountRepository(db)
     event_repo = StrategyEventRepository(db)
 
-    # ---- Market Data ----
+    # ---- Market Data (WebSocket 优先, 10s 无数据自动降级 REST) ----
     from cryptopilot.market.market_data_cache import MarketDataCache
-    from cryptopilot.market.rest_data import RestDataFetcher
+    from cryptopilot.market.websocket_manager import BinanceWebSocketManager
     from cryptopilot.market.rest_poller import RestMarketPoller
+    from cryptopilot.market.rest_data import RestDataFetcher
+
+    # 提前加载 raw YAML (供 market_data 配置读取)
+    import yaml as _yaml
+    with open(ROOT_DIR / "config.yaml", "r", encoding="utf-8") as _f:
+        raw_cfg = _yaml.safe_load(_f) or {}
 
     data_cache = MarketDataCache()
 
@@ -93,12 +99,50 @@ async def main() -> None:
         proxy_url = cfg.proxy.https
         logger.info(f"已启用代理: {proxy_url}")
 
-    # REST 行情轮询 (替代 WebSocket, Windows 兼容)
-    ws_manager = RestMarketPoller(
-        cache=data_cache,
-        proxy=proxy_url,
-        poll_interval=3.0,
-    )
+    # 读取数据源配置
+    md_cfg = raw_cfg.get("market_data", {})
+    data_source = md_cfg.get("source", "auto")
+    poll_interval = md_cfg.get("rest_poll_interval", 3)
+
+    ws_manager = None
+    use_rest_poller = False
+
+    if data_source == "rest":
+        use_rest_poller = True
+    elif data_source == "websocket":
+        pass  # use ws_manager
+    else:  # auto
+        # 尝试 WebSocket, 10s 无数据则降级 REST
+        from cryptopilot.market.websocket_manager import BinanceWebSocketManager as BWM
+        ws_manager = BinanceWebSocketManager(cfg, data_cache)
+        ws_task_test = asyncio.create_task(ws_manager.start(), name="ws_test")
+
+        logger.info("正在检测 WebSocket 连通性 (最多等待 10s)...")
+        for _ in range(20):  # 20 × 0.5s = 10s
+            await asyncio.sleep(0.5)
+            if len(data_cache.all_tickers()) > 10:
+                break
+
+        ticker_count = len(data_cache.all_tickers())
+        if ticker_count > 10:
+            logger.info(f"WebSocket 正常: {ticker_count} 个币种已就绪")
+        else:
+            logger.warning("WebSocket 无数据, 降级为 REST 轮询")
+            use_rest_poller = True
+            await ws_manager.stop()
+            ws_task_test.cancel()
+            try:
+                await ws_task_test
+            except Exception:
+                pass
+            ws_manager = None
+
+    if use_rest_poller:
+        ws_manager = RestMarketPoller(
+            cache=data_cache,
+            proxy=proxy_url,
+            poll_interval=float(poll_interval),
+        )
 
     # REST 按需数据拉取器
     rest_data = RestDataFetcher(proxy=proxy_url)
@@ -227,10 +271,7 @@ async def main() -> None:
     score_task = None
 
     # 从 config.yaml 读取评分配置 (支持预设)
-    import yaml
-    with open(ROOT_DIR / "config.yaml", "r", encoding="utf-8") as f:
-        raw_cfg = yaml.safe_load(f)
-    scoring_cfg = raw_cfg.get("scoring", {}) if raw_cfg else {}
+    scoring_cfg = raw_cfg.get("scoring", {})
 
     # 解析预设: active_preset → presets.xxx.factors
     active_preset = scoring_cfg.get("active_preset", "composite")
@@ -565,7 +606,8 @@ async def main() -> None:
     web_task = asyncio.create_task(uvicorn_server.serve(), name="health_web")
 
     logger.info(f"健康检查: http://{cfg.web.host}:{cfg.web.port}/health")
-    logger.info("行情源: REST 轮询 (全市场, 3s间隔)")
+    source_name = "REST 轮询" if use_rest_poller else "WebSocket"
+    logger.info(f"行情源: {source_name} (全市场, {'REST '+str(poll_interval)+'s' if use_rest_poller else '实时推送'})")
     logger.info(f"传统策略: {strategy_engine.total_count} 个已注册")
     logger.info("=" * 60)
     logger.info("CryptoPilot 运行中")

@@ -12,12 +12,11 @@ proxy:
   http: http://127.0.0.1:10090
   https: http://127.0.0.1:10090
 
-websocket:
-  streams:                   # Stream types to subscribe
-    - kline_1m
-    - ticker
-  reconnect_max_attempts: 100
-  reconnect_base_delay: 1    # seconds, doubles each attempt up to 60s cap
+market_data:
+  source: auto                # auto / websocket / rest (auto = WS优先,10s无数据降级REST)
+  rest_poll_interval: 3       # REST 轮询间隔 (秒)
+  ws_reconnect_max_attempts: 100
+  ws_reconnect_base_delay: 1
 
 risk:
   max_daily_loss_pct: 2.0    # Stop all trading if daily PnL drops below -2%
