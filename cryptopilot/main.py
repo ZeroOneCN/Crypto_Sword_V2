@@ -727,7 +727,7 @@ async def main() -> None:
                     signal, trailing_stops, order_executor, data_cache
                 )
 
-            except Exception:
+            except BaseException:
                 logger.exception(f"信号处理错误: {item}")
             finally:
                 signal_queue.task_done()
@@ -1182,7 +1182,11 @@ async def _execute_signal(
             result = _ws_to_order_result(raw)
         except BaseException:
             logger.warning("WS 下单失败, 降级 REST")
-            result = await executor.create_order(req)
+            try:
+                result = await executor.create_order(req)
+            except BaseException:
+                logger.exception("REST 下单也失败, 信号丢弃")
+                return
     else:
         result = await executor.create_order(req)
 
