@@ -60,6 +60,33 @@ class RiskConfig(BaseModel):
     max_position_pct: float = 20.0
     max_leverage: int = 10
     default_leverage: int = 3
+    trailing_distance_pct: float = 1.5
+    trailing_activation_pct: float = 0.5
+
+
+class TpTiersConfig(BaseModel):
+    """Multi-tier take-profit configuration."""
+    tp1_pct: float = 3.0
+    tp2_pct: float = 6.0
+    tp3_pct: float = 10.0
+    tp1_ratio: float = 0.30
+    tp2_ratio: float = 0.30
+    tp3_ratio: float = 0.40
+    breakeven_offset_pct: float = 0.5
+    sideways_defense_minutes: float = 90.0
+    sideways_exit_minutes: float = 180.0
+    sideways_range_pct: float = 2.0
+    pre_tp_guard_enabled: bool = True
+    pre_tp_guard_min_roi_pct: float = 0.2
+
+
+class ScoringConfig(BaseModel):
+    """Multi-factor scoring engine configuration."""
+    active_preset: str = "composite"
+    buy_threshold: float = 50.0
+    sell_threshold: float = -50.0
+    min_confidence: float = 0.5
+    tp_tiers: TpTiersConfig = Field(default_factory=TpTiersConfig)
 
 
 class OrderConfig(BaseModel):
@@ -99,6 +126,7 @@ class AppConfig(BaseModel):
     notification: NotificationConfig = Field(default_factory=NotificationConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     strategies: list[StrategyInstanceConfig] = Field(default_factory=list)
 
 

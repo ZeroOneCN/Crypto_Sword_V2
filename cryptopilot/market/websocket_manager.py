@@ -23,11 +23,20 @@ from cryptopilot.market.types import (
     StreamMessage,
 )
 
-# Binance WS base URLs
-FUTURES_WS = "wss://fstream.binance.com"
+# Binance WS base URLs — 按分流入口 (2026-05 最新架构)
+# /public: 高频公共行情 (depth, aggTrade)
+# /market: 常规市场数据 (kline, ticker, markPrice, miniTicker, forceOrder)
+# /private: 用户私有数据 (listenKey)
+FUTURES_WS_PUBLIC = "wss://fstream.binance.com/public"
+FUTURES_WS_MARKET = "wss://fstream.binance.com/market"
 FUTURES_WS_TESTNET = "wss://stream.binancefuture.com"
+FUTURES_WS_TESTNET_MARKET = "wss://stream.binancefuture.com/market"
 SPOT_WS = "wss://stream.binance.com:9443"
 SPOT_WS_TESTNET = "wss://testnet.binance.vision"
+
+# 流分类: 哪些属于 /market 入口
+_MARKET_STREAMS = {"!miniTicker@arr", "!ticker@arr", "!markPrice@arr"}  # 前缀匹配
+_MARKET_STREAM_PREFIXES = ("kline", "ticker", "markPrice", "miniTicker", "!miniTicker", "!ticker")
 
 MAX_RECONNECT_DELAY = 60
 
@@ -54,7 +63,7 @@ class BinanceWebSocketManager:
         self._shutdown_event = asyncio.Event()
         self._mini_ticker_logged = False
 
-        self._base_url = self._build_base_url()
+        self._base_url = self._build_base_url(category="market")
         self._stream_url = self._build_global_stream_url()
 
     @property
@@ -92,20 +101,26 @@ class BinanceWebSocketManager:
     # Internal
     # ----------------------------------------------------------------
 
-    def _build_base_url(self) -> str:
-        """Determine the WebSocket base URL from config."""
+    def _build_base_url(self, category: str = "market") -> str:
+        """Determine the WebSocket base URL from config and stream category.
+
+        Per Binance 2026 architecture: streams are split into /public, /market, /private.
+        !miniTicker@arr, !forceOrder@arr, ticker, kline, markPrice → /market
+        depth, aggTrade → /public
+        """
         ex = self._config.exchange
         if ex.trading_type == "futures":
-            return FUTURES_WS_TESTNET if ex.testnet else FUTURES_WS
+            if ex.testnet:
+                return FUTURES_WS_TESTNET_MARKET if category == "market" else FUTURES_WS_TESTNET
+            return FUTURES_WS_MARKET if category == "market" else FUTURES_WS_PUBLIC
         return SPOT_WS_TESTNET if ex.testnet else SPOT_WS
 
     def _build_global_stream_url(self) -> str:
         """构建纯全市场流 URL — 不订阅任何 per-symbol 流.
 
-        !miniTicker@arr: 全币种 24h 迷你行情 (每 1s 推送一次)
-        !forceOrder@arr: 全市场强平订单
+        !miniTicker@arr: 全币种 24h 迷你行情 (每 1s 推送一次, /market 入口)
         """
-        streams = ["!miniTicker@arr", "!forceOrder@arr"]
+        streams = ["!miniTicker@arr"]
         return f"{self._base_url}/stream?streams={'/'.join(streams)}"
 
     async def _connect_loop(self) -> None:
@@ -156,17 +171,21 @@ class BinanceWebSocketManager:
         await self._listen()
 
     async def _listen(self) -> None:
-        """Read messages from the WebSocket and dispatch to cache."""
-        while self._running and self._ws and self._ws.close_code is None:
-            try:
-                raw = await asyncio.wait_for(self._ws.recv(), timeout=60)
-            except asyncio.TimeoutError:
-                continue
+        """Read messages from the WebSocket and dispatch to cache.
 
-            messages = self._parse_message(raw)
-            for msg in messages:
-                if msg is not None:
-                    await self._cache.update(msg)
+        Uses async-for iteration which is the proper pattern for websockets>=12.
+        Avoids ConcurrencyError from manual recv() calls.
+        """
+        try:
+            async for raw in self._ws:
+                if not self._running:
+                    break
+                messages = self._parse_message(raw)
+                for msg in messages:
+                    if msg is not None:
+                        await self._cache.update(msg)
+        except websockets.ConnectionClosed:
+            pass
 
     def _parse_message(self, raw: str | bytes) -> list[StreamMessage | None]:
         """Parse a raw WebSocket message into typed StreamMessages."""

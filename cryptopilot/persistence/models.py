@@ -53,6 +53,21 @@ CREATE_TABLES = [
         leverage INTEGER DEFAULT 1,
         liquidation_price REAL DEFAULT 0,
         unrealized_pnl REAL DEFAULT 0,
+        tp_tiers_filled TEXT DEFAULT '',     -- comma-separated tier levels filled, e.g. "1,2"
+        partial_tp_count INTEGER DEFAULT 0,   -- number of partial TP fills
+        highest_price REAL DEFAULT 0,         -- highest price seen (LONG) / 0 if SHORT
+        lowest_price REAL DEFAULT 0,          -- lowest price seen (SHORT) / 0 if LONG
+        current_stop REAL DEFAULT 0,          -- current stop-loss price
+        sideways_defense_moved INTEGER DEFAULT 0,  -- 1 if sideways defense stop deployed
+        sideways_start_ts REAL DEFAULT 0,     -- epoch timestamp when sideways range began
+        initial_qty REAL DEFAULT 0,           -- original position quantity (before TP fills)
+        take_profit_price REAL DEFAULT 0,     -- original take-profit price (highest tier)
+        stop_loss_price REAL DEFAULT 0,       -- original stop-loss price
+        exit_reason TEXT DEFAULT '',          -- reason for exit (set on close)
+        exit_price REAL DEFAULT 0,            -- avg exit price (set on close)
+        exit_time TEXT DEFAULT '',            -- iso timestamp of exit
+        pnl REAL DEFAULT 0,                   -- realized PnL (set on close)
+        pnl_pct REAL DEFAULT 0,              -- realized PnL % (set on close)
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )
@@ -142,6 +157,21 @@ class PositionRecord:
     leverage: int = 1
     liquidation_price: float = 0.0
     unrealized_pnl: float = 0.0
+    tp_tiers_filled: str = ""           # comma-separated "1,2"
+    partial_tp_count: int = 0
+    highest_price: float = 0.0
+    lowest_price: float = 0.0
+    current_stop: float = 0.0
+    sideways_defense_moved: int = 0
+    sideways_start_ts: float = 0.0
+    initial_qty: float = 0.0
+    take_profit_price: float = 0.0
+    stop_loss_price: float = 0.0
+    exit_reason: str = ""
+    exit_price: float = 0.0
+    exit_time: str = ""
+    pnl: float = 0.0
+    pnl_pct: float = 0.0
     id: Optional[int] = None
     created_at: str = ""
     updated_at: str = ""

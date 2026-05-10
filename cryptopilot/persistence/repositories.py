@@ -130,11 +130,22 @@ class PositionRepository:
             pos.updated_at = now
             await self._db.execute(
                 """UPDATE positions SET qty=?, entry_price=?, mark_price=?,
-                   leverage=?, liquidation_price=?, unrealized_pnl=?, updated_at=?
+                   leverage=?, liquidation_price=?, unrealized_pnl=?,
+                   tp_tiers_filled=?, partial_tp_count=?,
+                   highest_price=?, lowest_price=?, current_stop=?,
+                   sideways_defense_moved=?, sideways_start_ts=?,
+                   initial_qty=?, take_profit_price=?, stop_loss_price=?,
+                   exit_reason=?, exit_price=?, exit_time=?, pnl=?, pnl_pct=?,
+                   updated_at=?
                    WHERE symbol=? AND side=?""",
                 (pos.qty, pos.entry_price, pos.mark_price, pos.leverage,
-                 pos.liquidation_price, pos.unrealized_pnl, now,
-                 pos.symbol, pos.side),
+                 pos.liquidation_price, pos.unrealized_pnl,
+                 pos.tp_tiers_filled, pos.partial_tp_count,
+                 pos.highest_price, pos.lowest_price, pos.current_stop,
+                 pos.sideways_defense_moved, pos.sideways_start_ts,
+                 pos.initial_qty, pos.take_profit_price, pos.stop_loss_price,
+                 pos.exit_reason, pos.exit_price, pos.exit_time, pos.pnl, pos.pnl_pct,
+                 now, pos.symbol, pos.side),
             )
         else:
             pos.created_at = now
@@ -142,9 +153,21 @@ class PositionRepository:
             await self._db.execute(
                 """INSERT INTO positions (symbol, side, qty, entry_price,
                    mark_price, leverage, liquidation_price, unrealized_pnl,
-                   created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (pos.symbol, pos.side, pos.qty, pos.entry_price, pos.mark_price,
-                 pos.leverage, pos.liquidation_price, pos.unrealized_pnl,
+                   tp_tiers_filled, partial_tp_count,
+                   highest_price, lowest_price, current_stop,
+                   sideways_defense_moved, sideways_start_ts,
+                   initial_qty, take_profit_price, stop_loss_price,
+                   exit_reason, exit_price, exit_time, pnl, pnl_pct,
+                   created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (pos.symbol, pos.side, pos.qty, pos.entry_price,
+                 pos.mark_price, pos.leverage, pos.liquidation_price,
+                 pos.unrealized_pnl,
+                 pos.tp_tiers_filled, pos.partial_tp_count,
+                 pos.highest_price, pos.lowest_price, pos.current_stop,
+                 pos.sideways_defense_moved, pos.sideways_start_ts,
+                 pos.initial_qty, pos.take_profit_price, pos.stop_loss_price,
+                 pos.exit_reason, pos.exit_price, pos.exit_time, pos.pnl, pos.pnl_pct,
                  pos.created_at, pos.updated_at),
             )
 

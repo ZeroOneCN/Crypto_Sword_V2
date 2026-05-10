@@ -31,7 +31,7 @@ order:
   rate_limit_weight_per_minute: 1200
 
 notification:
-  telegram_enabled: false    # Enable Telegram bot (requires .env config)
+  telegram_enabled: true    # Enable Telegram bot (requires .env config)
 
 logging:
   level: INFO                # DEBUG, INFO, WARNING, ERROR

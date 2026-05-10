@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections import deque
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from cryptopilot.strategy.scanner import Candidate
 
@@ -19,6 +19,8 @@ class FactorScore:
     weighted: float      # score * weight
     direction: str       # LONG / SHORT / NEUTRAL
     detail: str = ""
+    bonus_breakdown: list[str] = field(default_factory=list)
+    special_signal: str = ""  # 特殊信号标签, 如 "dark_flow", "oi_surge" 等
 
 
 class FactorBase(ABC):

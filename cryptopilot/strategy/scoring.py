@@ -16,6 +16,7 @@ import cryptopilot.strategy.factors.rsi_factor         # noqa
 import cryptopilot.strategy.factors.bollinger_factor   # noqa
 import cryptopilot.strategy.factors.oi_factor          # noqa
 import cryptopilot.strategy.factors.funding_factor      # noqa
+import cryptopilot.strategy.factors.dark_flow          # noqa
 import cryptopilot.strategy.factors.sentiment_factor    # noqa
 import cryptopilot.strategy.factors.volume_factor       # noqa
 import cryptopilot.strategy.factors.anomaly_factor      # noqa

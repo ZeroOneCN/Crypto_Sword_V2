@@ -164,6 +164,13 @@ class MarketDataCache:
         latest = hist[-1][1]
         return (latest - oldest) / oldest * 100
 
+    def get_oi_history(self, symbol: str) -> list[tuple[float, float]]:
+        """返回 OI 历史数据列表 [(timestamp, oi_value), ...]，用于趋势分析。"""
+        hist = self._oi_history.get(symbol)
+        if not hist:
+            return []
+        return list(hist)
+
     def get_liquidation_count(self, symbol: str) -> dict[str, int]:
         """返回 {BUY: N, SELL: N} 强平统计。"""
         return self._liquidation_counts.get(symbol, {"BUY": 0, "SELL": 0})
