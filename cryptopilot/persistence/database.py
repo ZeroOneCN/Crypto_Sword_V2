@@ -73,7 +73,39 @@ class Database:
         return dict(row) if row else None
 
     async def _migrate(self) -> None:
-        """Run table creation statements."""
+        """Run table creation statements, then add any missing columns."""
         for stmt in CREATE_TABLES:
             await self.execute(stmt)
-        logger.info(f"数据库迁移完成 ({len(CREATE_TABLES)} 条 DDL)")
+
+        # 增量迁移: 检测并添加缺失的列 (SQLite 不支持 ADD COLUMN IF NOT EXISTS)
+        COLUMN_ADDITIONS = {
+            "positions": {
+                "tp_tiers_filled": "TEXT DEFAULT ''",
+                "partial_tp_count": "INTEGER DEFAULT 0",
+                "highest_price": "REAL DEFAULT 0",
+                "lowest_price": "REAL DEFAULT 0",
+                "current_stop": "REAL DEFAULT 0",
+                "sideways_defense_moved": "INTEGER DEFAULT 0",
+                "sideways_start_ts": "REAL DEFAULT 0",
+                "initial_qty": "REAL DEFAULT 0",
+                "take_profit_price": "REAL DEFAULT 0",
+                "stop_loss_price": "REAL DEFAULT 0",
+                "exit_reason": "TEXT DEFAULT ''",
+                "exit_price": "REAL DEFAULT 0",
+                "exit_time": "TEXT DEFAULT ''",
+                "pnl": "REAL DEFAULT 0",
+                "pnl_pct": "REAL DEFAULT 0",
+            },
+        }
+        for table, columns in COLUMN_ADDITIONS.items():
+            rows = await self.fetch_all(f"PRAGMA table_info({table})")
+            existing = {r["name"] for r in rows}
+            for col_name, col_type in columns.items():
+                if col_name not in existing:
+                    await self.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
+                    )
+                    logger.info(f"数据库迁移: {table}.{col_name} 列已添加")
+
+        migrate_count = len(CREATE_TABLES)
+        logger.info(f"数据库迁移完成 ({migrate_count} 条 DDL)")

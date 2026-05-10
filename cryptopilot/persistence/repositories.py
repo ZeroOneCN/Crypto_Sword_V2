@@ -159,7 +159,7 @@ class PositionRepository:
                    initial_qty, take_profit_price, stop_loss_price,
                    exit_reason, exit_price, exit_time, pnl, pnl_pct,
                    created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (pos.symbol, pos.side, pos.qty, pos.entry_price,
                  pos.mark_price, pos.leverage, pos.liquidation_price,
                  pos.unrealized_pnl,
