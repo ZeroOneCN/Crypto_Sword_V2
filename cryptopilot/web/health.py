@@ -206,6 +206,24 @@ def create_health_app(
         except Exception as exc:
             return {"error": f"获取账户信息失败: {exc}"}
 
+    @app.get("/health/trades")
+    async def health_trades():
+        """返回最近成交记录 (JOIN fills + orders)."""
+        if db is None:
+            return {"error": "数据库不可用"}
+        try:
+            rows = await db.fetch_all("""
+                SELECT o.symbol, o.side, o.type, o.pos_side,
+                       f.price, f.qty, f.commission, f.commission_asset, f.filled_at
+                FROM fills f
+                JOIN orders o ON o.id = f.order_id
+                ORDER BY f.filled_at DESC
+                LIMIT 50
+            """)
+            return {"total": len(rows), "trades": [dict(r) for r in rows]}
+        except Exception as exc:
+            return {"error": str(exc)}
+
     @app.get("/health/signals")
     async def health_signals():
         """返回最近信号日志."""

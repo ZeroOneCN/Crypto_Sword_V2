@@ -191,28 +191,57 @@ async def main() -> None:
         )
 
         async def _on_order_update(event):
-            """WS 推送的订单状态变更 → 更新本地订单簿 + 必要时同步持仓."""
+            """WS 推送的订单状态变更 → 更新本地订单簿 + 写入成交 + 同步持仓."""
             try:
                 cid = event.client_order_id
                 status = event.order_status
                 executed = event.executed_qty
                 if cid:
                     await order_manager.update_order(cid, status, executed)
+
+                # 有成交 (PARTIALLY_FILLED / FILLED) → 记录 fill
+                if event.last_filled_qty > 0:
+                    try:
+                        row = await order_repo.get_by_client_id(cid)
+                    except Exception:
+                        row = None
+                    order_db_id = row["id"] if row else 0
+                    if order_db_id > 0:
+                        await order_manager.record_fill(
+                            order_db_id=order_db_id,
+                            price=event.last_filled_price,
+                            qty=event.last_filled_qty,
+                            commission=event.commission,
+                            asset=event.commission_asset,
+                        )
+
                 # 订单完全成交 → 异步同步持仓/账户 (限流: 3s 内最多一次)
                 if status == "FILLED":
                     now = time.time()
                     if now - getattr(_on_order_update, "_last_sync", 0) > 3.0:
                         _on_order_update._last_sync = now
                         await position_manager.sync_from_exchange(order_executor)
-                        # 记录信号日志: 成交
-                        from cryptopilot.web.health import add_signal_log
-                        add_signal_log({
-                            "time": datetime.now(tz=timezone.utc).isoformat(),
-                            "symbol": event.symbol,
-                            "action": f"FILLED_{event.side}",
-                            "score": round(event.executed_qty, 4),
-                            "detail": f"成交 {event.executed_qty}/{event.orig_qty} @{event.avg_price:.4f} 手续费={event.commission}",
-                        })
+                        # 记一笔账户快照
+                        try:
+                            acct = await order_executor.get_account_info()
+                            from cryptopilot.persistence.models import AccountSnapshot
+                            await account_repo.create(AccountSnapshot(
+                                total_balance=acct.total_balance,
+                                available_balance=acct.available_balance,
+                                unrealized_pnl=acct.unrealized_pnl,
+                                margin_ratio=acct.margin_ratio,
+                            ))
+                        except Exception:
+                            logger.debug("账户快照写入失败")
+                    # 成交写入信号日志
+                    from cryptopilot.web.health import add_signal_log
+                    add_signal_log({
+                        "time": datetime.now(tz=timezone.utc).isoformat(),
+                        "symbol": event.symbol,
+                        "action": f"FILLED_{event.side}",
+                        "score": round(event.executed_qty, 4),
+                        "detail": f"成交 {event.executed_qty}/{event.orig_qty} @{event.avg_price:.4f} PnL={event.realized_pnl:.2f}",
+                    })
             except Exception:
                 logger.exception("WS 订单更新处理异常")
 
@@ -704,6 +733,23 @@ async def main() -> None:
             except Exception:
                 logger.exception("每日报告生成失败")
 
+    # ---- Account Snapshot Logger ----
+    async def account_snapshot_loop():
+        while True:
+            await asyncio.sleep(300)  # 5 分钟
+            try:
+                acct = await order_executor.get_account_info()
+                await account_repo.create(AccountSnapshot(
+                    total_balance=acct.total_balance,
+                    available_balance=acct.available_balance,
+                    unrealized_pnl=acct.unrealized_pnl,
+                    margin_ratio=acct.margin_ratio,
+                ))
+            except Exception:
+                pass
+
+    snapshot_task = asyncio.create_task(account_snapshot_loop(), name="account_snapshot")
+
     daily_task = asyncio.create_task(daily_report_loop(), name="daily_report")
 
     # ---- Start all services ----
@@ -752,6 +798,13 @@ async def main() -> None:
     daily_task.cancel()
     try:
         await daily_task
+    except (asyncio.CancelledError, Exception):
+        pass
+
+    # Stop account snapshot
+    snapshot_task.cancel()
+    try:
+        await snapshot_task
     except (asyncio.CancelledError, Exception):
         pass
 

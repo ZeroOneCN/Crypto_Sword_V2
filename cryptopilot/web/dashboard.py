@@ -124,11 +124,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<!-- Row 4: Candidate Scoring Detail -->
+<!-- Row 4: Scoring Detail + Trade History -->
 <div class="grid">
   <div class="card">
     <h2>候选池评分明细 <span class="hint">Top-5 多因子投票</span></h2>
     <div id="scoring_detail"><p style="text-align:center;padding:20px;color:#64748b;">暂无候选 — 等待扫描器产出</p></div>
+  </div>
+  <div class="card">
+    <h2>成交记录 <span class="hint" id="hint_trades"></span></h2>
+    <div id="trade_history"><p style="text-align:center;padding:20px;color:#64748b;">暂无成交记录</p></div>
   </div>
 </div>
 
@@ -284,6 +288,31 @@ async function load() {
       html += '<div class="inline-stat"><span>最大回撤</span><span>' + d.max_drawdown_pct + '%</span></div>';
       html += '<div class="inline-stat"><span>夏普比率</span><span>' + d.sharpe_ratio + '</span></div>';
       document.getElementById('report').innerHTML = html;
+    }
+  } catch(e) {}
+
+  // ---- Trade History ----
+  try {
+    const r = await fetch('/health/trades');
+    const d = await r.json();
+    if (!d.error && d.trades && d.trades.length > 0) {
+      let html = '<div class="scroll-table"><table><tr><th>时间</th><th>币种</th><th>方向</th><th>价格</th><th>数量</th><th>手续费</th></tr>';
+      d.trades.slice(0, 30).forEach(t => {
+        const side = (t.side || '').toUpperCase();
+        const sideCls = side === 'BUY' ? 'badge-long' : 'badge-short';
+        const tm = t.filled_at ? new Date(t.filled_at + 'Z').toLocaleTimeString() : '-';
+        html += '<tr>' +
+          '<td class="nowrap">' + tm + '</td>' +
+          '<td><strong>' + t.symbol + '</strong></td>' +
+          '<td><span class="badge ' + sideCls + '">' + side + '</span></td>' +
+          '<td>' + fmtNum(t.price, 4) + '</td>' +
+          '<td>' + fmtNum(t.qty) + '</td>' +
+          '<td>' + fmtNum(t.commission, 4) + '</td>' +
+          '</tr>';
+      });
+      html += '</table></div>';
+      document.getElementById('trade_history').innerHTML = html;
+      document.getElementById('hint_trades').textContent = '共 ' + d.total + ' 笔';
     }
   } catch(e) {}
 
