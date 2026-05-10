@@ -280,38 +280,60 @@ async def main() -> None:
     async def sync_trade_history():
         """从 Binance 拉取近 90 天历史成交, 回填 fills + orders 表."""
         try:
-            # 检查 fills 表是否已有数据 (已同步过则跳过)
             existing_count_row = await db.fetch_all("SELECT COUNT(*) as cnt FROM fills", ())
             existing_count = existing_count_row[0].get("cnt", 0) if existing_count_row else 0
-            if existing_count > 100:
-                logger.info(f"fills 表已有 {existing_count} 条记录, 跳过全量历史同步")
-                return
 
+            end_time = int(time.time() * 1000)
+            start_time = end_time - 90 * 86400 * 1000
+
+            # Step 1: 先拉取 income history (REALIZED_PNL) — 不需要知道币种
+            if existing_count < 10:
+                logger.info("从 Binance 拉取盈亏流水...")
+                try:
+                    incomes = await order_executor.get_income_history(
+                        start_time=start_time, end_time=end_time, limit=1000,
+                    )
+                    realized = [i for i in incomes if i.income_type == "REALIZED_PNL" and i.income != 0]
+                    commission = [i for i in incomes if i.income_type == "COMMISSION"]
+                    funding = [i for i in incomes if i.income_type == "FUNDING_FEE"]
+                    logger.info(
+                        f"盈亏流水: {len(realized)} 笔 PnL, "
+                        f"{len(commission)} 笔手续费, {len(funding)} 笔资金费率"
+                    )
+                except Exception:
+                    incomes = []
+
+            # Step 2: 收集要同步的币种
             symbols_to_sync: set[str] = set()
             for pos in position_manager.get_all_positions():
                 sym = pos.get("symbol", "")
                 if sym:
                     symbols_to_sync.add(sym)
 
+            # 从 income 获取历史交易过的币种
+            try:
+                for i in incomes:
+                    if i.symbol and i.symbol not in symbols_to_sync:
+                        symbols_to_sync.add(i.symbol)
+            except Exception:
+                pass
+
+            # 从 DB 已有订单获取
             if not symbols_to_sync:
-                recent_orders = await order_repo.get_history(limit=20)
+                recent_orders = await order_repo.get_history(limit=50)
                 for o in recent_orders:
                     sym = o.get("symbol", "")
                     if sym:
                         symbols_to_sync.add(sym)
 
-            if not symbols_to_sync:
-                logger.info("无历史数据需同步")
-                return
-
-            end_time = int(time.time() * 1000)
-            start_time = end_time - 90 * 86400 * 1000
+            if symbols_to_sync:
+                logger.info(f"历史数据同步: {len(symbols_to_sync)} 个币种")
 
             total_fills = 0
-            for sym in list(symbols_to_sync)[:20]:
+            for sym in list(symbols_to_sync)[:30]:
                 try:
                     trades = await order_executor.get_trade_history(
-                        symbol=sym, start_time=start_time, end_time=end_time, limit=500,
+                        symbol=sym, start_time=start_time, end_time=end_time, limit=1000,
                     )
                     if not trades:
                         continue
@@ -328,7 +350,6 @@ async def main() -> None:
                                 executed_qty=t.qty, avg_price=t.price,
                                 pos_side=t.position_side, created_at=created,
                             )
-                            # 记录 fill (INSERT OR IGNORE 风格 — 如果同订单已有则跳过)
                             existing_fills = await db.fetch_all(
                                 "SELECT id FROM fills WHERE order_id = ? AND price = ? AND qty = ?",
                                 (order_db_id, t.price, t.qty),
@@ -344,12 +365,16 @@ async def main() -> None:
                         except Exception:
                             pass
 
-                    logger.info(f"历史同步: {sym} {len(trades)} 笔成交")
+                    logger.debug(f"历史同步: {sym} {len(trades)} 笔成交")
                 except Exception:
                     logger.debug(f"历史同步跳过 {sym}")
 
             if total_fills > 0:
-                logger.info(f"历史数据同步完成: 新增 {total_fills} 条成交记录")
+                logger.info(f"历史数据同步: 新增 {total_fills} 条成交 (fills 表总计 ~{existing_count + total_fills})")
+            elif symbols_to_sync:
+                logger.info("历史数据同步: 无新增成交 (fill 表已是最新)")
+            else:
+                logger.info("无历史交易数据可同步")
         except Exception:
             logger.exception("历史数据同步异常 (非致命)")
 
@@ -965,6 +990,7 @@ async def _execute_signal(
     For CLOSE signals: cancels all open orders (including SL/TP) first.
     """
     from cryptopilot.trading.order_executor import OrderRequest, _make_client_id
+    from cryptopilot.trading.precision import clamp_qty, clamp_price
 
     # Determine order side
     if signal.action == "OPEN_LONG":
@@ -1058,37 +1084,57 @@ async def _execute_signal(
 
     await order_manager.record_order(result, signal.strategy_id)
 
-    # Get actual fill price — wait for market order to fill
-    fill_price = result.avg_price or result.price or entry_price
+    # 获取实际成交价 — Market 单异步成交, 需轮询确认
+    actual_fill_price = result.avg_price if result.avg_price > 0 else 0.0
 
     # Notify
     if signal.action.startswith("OPEN"):
-        # 等待订单成交 (Market order 异步成交, 需要轮询)
-        if fill_price <= 0:
-            for _ in range(10):  # 最多等 5 秒
+        # 等待 Market 单成交 (avg_price > 0 表示已成交)
+        if actual_fill_price <= 0:
+            logger.info(f"等待 {signal.symbol} Market 单成交...")
+            for attempt in range(20):  # 最多等 10 秒
                 await asyncio.sleep(0.5)
                 try:
                     updated = await executor.get_order(
-                        signal.symbol, client_order_id=result.client_order_id
+                        signal.symbol, result.client_order_id or ""
                     )
                     if updated and updated.avg_price > 0:
-                        fill_price = updated.avg_price
+                        actual_fill_price = updated.avg_price
                         result = updated
+                        logger.info(f"{signal.symbol} 已成交 @{actual_fill_price:.5f}")
                         break
                 except Exception:
                     pass
-            if fill_price <= 0:
-                fill_price = entry_price  # 兜底用信号价格
+            else:
+                actual_fill_price = entry_price  # 兜底
+                logger.warning(f"{signal.symbol} 成交确认超时, 用信号价兜底")
 
         # 同步持仓确保仓位存在
         await position_manager.sync_from_exchange(executor)
 
+        # 检查仓位是否真的存在
+        pos_check = position_manager.get_position(signal.symbol)
+        if not pos_check or abs(pos_check.get("qty", 0)) <= 0:
+            logger.error(f"{signal.symbol} 仓位不存在, 无法放置 SL/TP — 撤单")
+            await executor.cancel_all_orders(signal.symbol)
+            # Try to close if somehow partially filled
+            try:
+                await executor.create_order(OrderRequest(
+                    symbol=signal.symbol,
+                    side="SELL" if pos_side == "LONG" else "BUY",
+                    order_type="MARKET", quantity=qty,
+                    reduce_only=True, position_side=pos_side,
+                ))
+            except Exception:
+                pass
+            return
+
+        fill_price = actual_fill_price if actual_fill_price > 0 else entry_price
         notifier.position_opened(signal.symbol, pos_side, fill_price, qty)
 
-        # ---- Place exchange-native Stop-Loss and Take-Profit ----
+        # ---- Place Stop-Loss + 3-Tier Take-Profit ----
         risk = risk_config or {}
         sl_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 3.0)
-        tp_pct = signal.take_profit_pct or risk.get("take_profit_pct", 6.0)
 
         if signal.stop_loss > 0:
             sl_price = signal.stop_loss
@@ -1100,8 +1146,22 @@ async def _execute_signal(
         else:
             sl_price = 0
 
-        # 止损止盈必须成功放置, 否则平掉刚开的仓位
+        # 精确计算 TP 价格
+        tp1_pct = float(risk.get("tp1_pct", 3.0))
+        tp2_pct = float(risk.get("tp2_pct", 6.0))
+        tp3_pct = float(risk.get("tp3_pct", 10.0))
+        if pos_side == "LONG":
+            tp1 = fill_price * (1 + tp1_pct / 100)
+            tp2 = fill_price * (1 + tp2_pct / 100)
+            tp3 = fill_price * (1 + tp3_pct / 100)
+        else:
+            tp1 = fill_price * (1 - tp1_pct / 100)
+            tp2 = fill_price * (1 - tp2_pct / 100)
+            tp3 = fill_price * (1 - tp3_pct / 100)
+
         sl_tp_placed = False
+        sl_success = False
+        tp_count = 0
         try:
             if sl_price > 0:
                 sl_req = OrderRequest(
@@ -1116,48 +1176,71 @@ async def _execute_signal(
                 )
                 sl_result = await executor.create_order(sl_req)
                 await order_manager.record_order(sl_result, signal.strategy_id)
+                sl_success = True
+                logger.info(f"SL 已放置: {signal.symbol} @{sl_price:.5f}")
 
-                tp_results = await executor.create_three_tier_tp(
-                    symbol=signal.symbol,
-                    position_side=pos_side,
-                    total_qty=qty,
-                    entry_price=fill_price,
-                    tp1_pct=float(risk.get("tp1_pct", 3.0)),
-                    tp2_pct=float(risk.get("tp2_pct", 6.0)),
-                    tp3_pct=float(risk.get("tp3_pct", 10.0)),
-                )
-                for r in tp_results:
-                    await order_manager.record_order(r, signal.strategy_id)
-                sl_tp_placed = True
+                # TP1 (30% 仓位)
+                tp_reqs = []
+                close_side = "SELL" if pos_side == "LONG" else "BUY"
+                for tp_price, tp_qty_ratio, label in [
+                    (tp1, 0.30, "TP1"), (tp2, 0.30, "TP2"), (tp3, 0.40, "TP3")
+                ]:
+                    tp_qty = qty * tp_qty_ratio
+                    # Precision clamping
+                    filters = executor._symbol_info.get(signal.symbol)
+                    if filters:
+                        tp_qty = clamp_qty(tp_qty, filters["step_size"],
+                                          filters.get("min_qty", 0), filters["max_qty"])
+                        tp_price_c = clamp_price(tp_price, filters["tick_size"])
+                    else:
+                        tp_price_c = tp_price
+                    if tp_qty > 0:
+                        tp_reqs.append(OrderRequest(
+                            symbol=signal.symbol, side=close_side,
+                            order_type="LIMIT", quantity=tp_qty,
+                            price=tp_price_c, reduce_only=True,
+                            position_side=pos_side,
+                            client_order_id=_make_client_id(label.lower()),
+                            time_in_force="GTC",
+                        ))
+
+                for tp_req in tp_reqs:
+                    try:
+                        tp_r = await executor.create_order(tp_req)
+                        await order_manager.record_order(tp_r, signal.strategy_id)
+                        tp_count += 1
+                    except Exception as exc_tp:
+                        logger.warning(f"TP 下单失败: {tp_req.symbol} {exc_tp}")
+
+                sl_tp_placed = sl_success and tp_count > 0
                 logger.info(
-                    f"保护单已提交: {signal.symbol} SL={sl_price:.4f} "
-                    f"+ TP1/2/3 共 {len(tp_results)} 个"
+                    f"保护单: {signal.symbol} SL={sl_price:.5f} "
+                    f"TP1={tp1:.5f}(30%) TP2={tp2:.5f}(30%) TP3={tp3:.5f}(40%) "
+                    f"[{tp_count}/3 个TP已放置]"
                 )
             else:
-                logger.error(f"{signal.symbol} 止损价格无效 (sl_price={sl_price})")
+                logger.error(f"{signal.symbol} 止损价无效 (sl={sl_price})")
         except Exception:
-            logger.exception(f"提交 {signal.symbol} 保护单失败, 将平掉裸仓")
+            logger.exception(f"{signal.symbol} SL/TP 提交异常")
 
         if not sl_tp_placed:
-            # 保护单失败 → 立即平仓
+            logger.error(
+                f"{signal.symbol} SL/TP 放置失败 (SL={sl_success}, TP={tp_count}/3) "
+                f"— 紧急平仓"
+            )
             try:
+                await executor.cancel_all_orders(signal.symbol)
                 close_side = "SELL" if pos_side == "LONG" else "BUY"
-                close_req = OrderRequest(
-                    symbol=signal.symbol,
-                    side=close_side,
-                    order_type="MARKET",
-                    quantity=qty,
-                    reduce_only=True,
-                    position_side=pos_side,
+                await executor.create_order(OrderRequest(
+                    symbol=signal.symbol, side=close_side,
+                    order_type="MARKET", quantity=qty,
+                    reduce_only=True, position_side=pos_side,
                     client_order_id=_make_client_id("emergency"),
-                )
-                close_result = await executor.create_order(close_req)
-                await order_manager.record_order(close_result, signal.strategy_id)
-                logger.warning(
-                    f"裸仓已平: {signal.symbol} — SL/TP 放置失败, 已紧急市价平仓"
-                )
+                ))
+                await position_manager.sync_from_exchange(executor)
+                logger.warning(f"裸仓已平: {signal.symbol}")
             except Exception:
-                logger.exception(f"紧急平仓也失败了: {signal.symbol} — 需人工处理!")
+                logger.exception(f"紧急平仓也失败: {signal.symbol}")
     else:
         pnl = _calc_pnl(position_manager, signal.symbol, fill_price, qty)
         notifier.position_closed(signal.symbol, pos_side, fill_price, pnl)

@@ -212,8 +212,9 @@ async function load() {
       upnlEl.textContent = fmtUSD(d.unrealized_pnl);
       upnlEl.style.color = d.unrealized_pnl >= 0 ? '#4ade80' : '#f87171';
       const mrEl = document.getElementById('stat_margin');
-      mrEl.textContent = fmtPct(d.margin_ratio * 100);
-      mrEl.style.color = d.margin_ratio > 0.8 ? '#f87171' : d.margin_ratio > 0.5 ? '#fbbf24' : '#4ade80';
+      const mrPct = (d.margin_ratio || 0) * 100;
+      mrEl.textContent = mrPct.toFixed(2) + '%';
+      mrEl.style.color = mrPct > 80 ? '#f87171' : mrPct > 50 ? '#fbbf24' : '#4ade80';
     }
   } catch(e) {}
 
