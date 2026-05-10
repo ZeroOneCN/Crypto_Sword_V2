@@ -1174,26 +1174,12 @@ async def _execute_signal(
         reduce_only=signal.action.startswith("CLOSE"),
     )
 
-    # 下单: WS 优先, REST 兜底
-    if getattr(_execute_signal, 'use_ws', False) and _execute_signal.ws_trader:
-        try:
-            raw = await _execute_signal.ws_trader.place_order(
-                symbol=req.symbol, side=req.side, type=req.order_type,
-                quantity=req.quantity, price=req.price if req.price > 0 else None,
-                stopPrice=req.stop_price if req.stop_price > 0 else None,
-                reduceOnly=req.reduce_only, positionSide=req.position_side,
-                newClientOrderId=req.client_order_id,
-            )
-            result = _ws_to_order_result(raw)
-        except BaseException:
-            logger.warning("WS 下单失败, 降级 REST")
-            try:
-                result = await executor.create_order(req)
-            except BaseException:
-                logger.exception("REST 下单也失败, 信号丢弃")
-                return
-    else:
+    # 下单: REST 直连 (WS 连接不稳定, 直接走 REST 更可靠)
+    try:
         result = await executor.create_order(req)
+    except BaseException:
+        logger.exception("REST 下单失败, 信号丢弃")
+        return
 
     await order_manager.record_order(result, signal.strategy_id)
 
