@@ -202,10 +202,10 @@ class StrategyEngine:
             cache=cache,
             candidate_pool=pool,
             scan_interval=scan_interval,
-            min_change_pct=0.8,
-            volume_mult=1.3,
-            oi_change_threshold=2.0,
-            min_score=25.0,
+            min_change_pct=1.5,
+            volume_mult=1.8,
+            oi_change_threshold=3.0,
+            min_score=40.0,
             max_symbols_to_scan=200,
         )
 

@@ -49,15 +49,15 @@ web:
 scoring:
   # 当前启用的预设 (chase / composite / ambush)
   active_preset: composite
-  buy_threshold: 50
-  sell_threshold: -50
-  min_confidence: 0.5
+  buy_threshold: 55
+  sell_threshold: -55
+  min_confidence: 0.65
 
   presets:
     # ---- 🔥 追多 (Chase Long): 纯费率排名, 短线轧空 ----
     chase:
-      buy_threshold: 40
-      sell_threshold: -40
+      buy_threshold: 50
+      sell_threshold: -50
       factors:
         - { name: funding, weight: 0.60 }           # 费率最核心
         - { name: volume, weight: 0.20 }             # 量能确认
@@ -66,8 +66,8 @@ scoring:
 
     # ---- 📊 综合 (Composite): 四维均衡评分 ----
     composite:
-      buy_threshold: 25      # 降低阈值, 更容易出信号
-      sell_threshold: -30
+      buy_threshold: 55      # 高阈值, 只有强信号才开仓
+      sell_threshold: -55
       factors:
         - { name: funding, weight: 0.12 }           # 🧊 费率
         - { name: market_cap, weight: 0.12 }         # 💎 市值
@@ -81,8 +81,8 @@ scoring:
 
     # ---- 🎯 埋伏 (Ambush): 市值优先, 中长线布局 ----
     ambush:
-      buy_threshold: 45
-      sell_threshold: -45
+      buy_threshold: 55
+      sell_threshold: -55
       factors:
         - { name: market_cap, weight: 0.35 }         # 💎 市值最重要 (<$50M满分)
         - { name: sideways, weight: 0.25 }           # 💤 横盘收筹 (>120天满分)
