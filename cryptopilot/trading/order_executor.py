@@ -716,15 +716,15 @@ class OrderExecutor:
 
     async def get_ticker_price(self, symbol: str) -> float | None:
         """获取币种最新价 (公开端点, 无权重消耗)."""
-        import aiohttp
-        base = self._build_base_url().replace("https://", "https://")
-        url = f"{base}/ticker/price?symbol={symbol}"
+        import httpx
+        base = self._build_base_url()
+        url = f"{base}/fapi/v1/ticker/price?symbol={symbol}"
         try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(url, timeout=aiohttp.ClientTimeout(total=5)) as r:
-                    if r.status == 200:
-                        data = await r.json()
-                        return float(data.get("price", 0))
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(url)
+                if r.status_code == 200:
+                    data = r.json()
+                    return float(data.get("price", 0))
         except Exception:
             pass
         return None
