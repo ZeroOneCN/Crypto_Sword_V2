@@ -381,6 +381,26 @@ async function load(){
 function tick(){countdown-=1;if(countdown<=0)countdown=REFRESH_MS/1000}
 setInterval(tick,1000);
 load();setInterval(load,REFRESH_MS);
+
+// ---- 日志面板 ----
+async function loadLogs(){
+  try{
+    const r=await fetch('/health/logs?lines=40');const d=await r.json();
+    if(!d.error&&d.lines&&d.lines.length>0){
+      const container=document.getElementById('log_lines');
+      let html='';
+      d.lines.forEach(l=>{
+        const cls='log-'+esc(l.level||'INFO');
+        html+='<div class=\"log-line\"><span class=\"lt\">'+esc(l.time||'')+'</span><span class=\"'+cls+'\">'+esc(l.msg||'')+'</span></div>';
+      });
+      container.innerHTML=html;
+      container.scrollTop=container.scrollHeight;
+      document.getElementById('hint_log').textContent=(d.file||'')+' ('+d.lines.length+'行)';
+    }
+  }catch(e){}
+}
+setInterval(loadLogs,3000);
+loadLogs();
 </script>
 </body>
 </html>"""
