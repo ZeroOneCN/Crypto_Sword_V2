@@ -113,22 +113,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <!-- Row 3: Multi-period Performance -->
 <div class="grid">
   <div class="card">
-    <h2>交易绩效 <span class="hint" id="hint_perf">全部</span></h2>
-    <div style="display:flex; gap:6px;margin-bottom:10px;">
-      <button onclick="loadPeriod('all')" id="btn_all" class="perf-btn active">全部</button>
-      <button onclick="loadPeriod('today')" id="btn_today" class="perf-btn">今日</button>
-      <button onclick="loadPeriod('7d')" id="btn_7d" class="perf-btn">7天</button>
-      <button onclick="loadPeriod('30d')" id="btn_30d" class="perf-btn">30天</button>
-    </div>
+    <h2>交易绩效 (Binance) <span class="hint" id="hint_perf"></span></h2>
     <div id="report">
-      <div class="inline-stat"><span>交易次数</span><span>--</span></div>
-      <div class="inline-stat"><span>胜率</span><span>--</span></div>
-      <div class="inline-stat"><span>总盈亏</span><span>--</span></div>
-      <div class="inline-stat"><span>最大回撤</span><span>--</span></div>
-      <div class="inline-stat"><span>夏普比率</span><span>--</span></div>
-      <div class="inline-stat"><span>盈亏因子</span><span>--</span></div>
-      <div class="inline-stat"><span>手续费</span><span>--</span></div>
-      <div class="inline-stat"><span>资金费率</span><span>--</span></div>
+      <div class="inline-stat"><span>7天盈亏</span><span>--</span></div>
+      <div class="inline-stat"><span>30天盈亏</span><span>--</span></div>
+      <div class="inline-stat"><span>累计盈亏</span><span>--</span></div>
+      <div class="inline-stat"><span>7天手续费</span><span>--</span></div>
+      <div class="inline-stat"><span>7天资金费率</span><span>--</span></div>
+      <div class="inline-stat"><span>今日盈亏</span><span>--</span></div>
     </div>
   </div>
 
@@ -167,8 +159,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <script>
 const REFRESH_MS = 5000;
 let countdown = REFRESH_MS / 1000;
-let currentPeriod = 'all';
-
 function fmtUSD(v) {
   const n = parseFloat(v);
   if (isNaN(n)) return '--';
@@ -298,8 +288,25 @@ async function load() {
     document.getElementById('positions').innerHTML = '<p class="error">持仓数据加载失败</p>';
   }
 
-  // ---- Performance (period-aware) ----
-  await loadPeriod(currentPeriod, true);
+  // ---- Binance 权威盈亏 ----
+  try {
+    const r = await fetch('/health/pnl');
+    const d = await r.json();
+    if (!d.error) {
+      const pnl7 = d.realized_pnl_7d || 0;
+      const pnl30 = d.realized_pnl_30d || 0;
+      const pnlAll = d.total_realized_pnl || 0;
+      document.getElementById('report').innerHTML =
+        '<div class="inline-stat"><span>7天盈亏</span><span class="' + cn(pnl7) + '">' + fmtUSD(pnl7) + '</span></div>' +
+        '<div class="inline-stat"><span>30天盈亏</span><span class="' + cn(pnl30) + '">' + fmtUSD(pnl30) + '</span></div>' +
+        '<div class="inline-stat"><span>累计盈亏</span><span class="' + cn(pnlAll) + '">' + fmtUSD(pnlAll) + '</span></div>' +
+        '<div class="inline-stat"><span>7天手续费</span><span>' + fmtUSD(d.commission_7d || 0) + '</span></div>' +
+        '<div class="inline-stat"><span>7天资金费率</span><span>' + fmtUSD(d.funding_7d || 0) + '</span></div>' +
+        '<div class="inline-stat"><span>今日盈亏</span><span class="' + cn(d.realized_pnl_1d || 0) + '">' + fmtUSD(d.realized_pnl_1d || 0) + '</span></div>' +
+        '<div class="inline-stat"><span>交易币种(30d)</span><span>' + (d.symbols_traded || 0) + '</span></div>';
+      document.getElementById('hint_perf').textContent = 'Binance 权威数据';
+    }
+  } catch(e) {}
 
   // ---- Trade History ----
   try {
@@ -413,59 +420,6 @@ async function load() {
   } catch(e) {
     document.getElementById('signal_log').innerHTML = '<p class="error">加载失败</p>';
   }
-}
-
-async function loadPeriod(period, silent) {
-  currentPeriod = period;
-  // Update button states
-  document.querySelectorAll('.perf-btn').forEach(b => b.classList.remove('active'));
-  const btn = document.getElementById('btn_' + period);
-  if (btn) btn.classList.add('active');
-
-  const labelMap = { all: '全部', today: '今日', '7d': '7天', '30d': '30天' };
-  document.getElementById('hint_perf').textContent = labelMap[period] || period;
-
-  let url = '/health/report/summary';
-  if (period === 'today') url = '/health/report/today';
-  else if (period === '7d') url = '/health/report/7d';
-  else if (period === '30d') url = '/health/report/30d';
-
-  try {
-    const r = await fetch(url);
-    const d = await r.json();
-    if (!d.error) {
-      const pnl = parseFloat(d.total_pnl || 0);
-      let html = '';
-      html += '<div class="inline-stat"><span>交易次数</span><span>' + d.total_trades + '</span></div>';
-      html += '<div class="inline-stat"><span>胜率</span><span>' + d.win_rate + '%</span></div>';
-      html += '<div class="inline-stat"><span>总盈亏</span><span class="' + cn(pnl) + '">' + fmtUSD(pnl) + '</span></div>';
-      html += '<div class="inline-stat"><span>最大回撤</span><span>' + d.max_drawdown_pct + '%</span></div>';
-      html += '<div class="inline-stat"><span>夏普比率</span><span>' + d.sharpe_ratio + '</span></div>';
-      html += '<div class="inline-stat"><span>盈亏因子</span><span>' + (d.profit_factor || '-') + '</span></div>';
-      html += '<div class="inline-stat"><span>手续费</span><span>' + fmtUSD(d.total_commission || 0) + '</span></div>';
-      html += '<div class="inline-stat"><span>资金费率</span><span>' + fmtUSD(d.total_funding || 0) + '</span></div>';
-      document.getElementById('report').innerHTML = html;
-
-      // Update daily PnL if switching to 30d
-      if (!silent && period === '30d' && d.daily_pnl && d.daily_pnl.length > 0) {
-        renderDailyPnl(d.daily_pnl);
-      }
-    }
-  } catch(e) {}
-}
-
-function renderDailyPnl(bars) {
-  const maxAbs = Math.max(...bars.map(b => Math.abs(b.pnl)), 0.01);
-  let html = '<div style="display:flex;align-items:flex-end;gap:1px;height:80px;overflow-x:auto;padding:4px 0;">';
-  bars.forEach(b => {
-    const h = Math.max(4, (Math.abs(b.pnl) / maxAbs * 70));
-    const cls = b.pnl >= 0 ? 'daily-bar-pos' : 'daily-bar-neg';
-    html += '<div title="' + b.date + ': ' + fmtUSD(b.pnl) + ' (' + b.trades + '笔) ' +
-      '费率:' + fmtUSD(b.fee) + '" ' +
-      'class="daily-bar ' + cls + '" style="height:' + h + 'px;flex:0 0 12px;"></div>';
-  });
-  html += '</div><div style="font-size:0.65rem;color:#475569;margin-top:4px;text-align:center;">每日盈亏 + 费率 (最近30天) | 绿=盈利 红=亏损</div>';
-  document.getElementById('daily_pnl').innerHTML = html;
 }
 
 // Countdown timer

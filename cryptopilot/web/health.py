@@ -20,6 +20,90 @@ def add_signal_log(entry: dict) -> None:
         _signal_log[:50] = []  # 批量裁剪, 避免 O(n) 弹出
 
 
+# Binance income 缓存 (直接拉取盈亏数据, 与交易所显示一致)
+_income_cache: dict = {"data": None, "time": 0, "ttl": 120}  # 2 分钟缓存
+
+
+async def _fetch_income_pnl(order_executor) -> dict | None:
+    """从 Binance income API 拉取盈亏汇总 (与交易所7d/30d数据一致)."""
+    now = __import__("time").time()
+    if _income_cache["data"] and (now - _income_cache["time"]) < _income_cache["ttl"]:
+        return _income_cache["data"]
+
+    try:
+        end = int(now * 1000)
+        incomes = await order_executor.get_income_history(start_time=end - 90 * 86400000, end_time=end, limit=1000)
+    except Exception:
+        return _income_cache.get("data")
+
+    if not incomes:
+        return None
+
+    result = {
+        "total_realized_pnl": 0.0,    # 累计已实现盈亏
+        "total_commission": 0.0,       # 累计手续费
+        "total_funding": 0.0,          # 累计资金费率
+        "realized_pnl_7d": 0.0,
+        "commission_7d": 0.0,
+        "funding_7d": 0.0,
+        "realized_pnl_30d": 0.0,
+        "commission_30d": 0.0,
+        "funding_30d": 0.0,
+        "realized_pnl_1d": 0.0,
+        "commission_1d": 0.0,
+        "funding_1d": 0.0,
+        "trade_count_7d": 0,
+        "trade_count_30d": 0,
+        "symbols_traded": set(),
+    }
+
+    cutoff_1d = now - 86400
+    cutoff_7d = now - 7 * 86400
+    cutoff_30d = now - 30 * 86400
+
+    for i in incomes:
+        t = i.time / 1000
+        if i.income_type == "REALIZED_PNL":
+            result["total_realized_pnl"] += i.income
+            if t >= cutoff_30d:
+                result["realized_pnl_30d"] += i.income
+                if i.symbol:
+                    result["symbols_traded"].add(i.symbol)
+            if t >= cutoff_7d:
+                result["realized_pnl_7d"] += i.income
+                result["trade_count_7d"] += 1
+            if t >= cutoff_1d:
+                result["realized_pnl_1d"] += i.income
+        elif i.income_type == "COMMISSION":
+            result["total_commission"] += i.income
+            if t >= cutoff_7d:
+                result["commission_7d"] += i.income
+            if t >= cutoff_30d:
+                result["commission_30d"] += i.income
+            if t >= cutoff_1d:
+                result["commission_1d"] += i.income
+        elif i.income_type == "FUNDING_FEE":
+            result["total_funding"] += i.income
+            if t >= cutoff_7d:
+                result["funding_7d"] += i.income
+            if t >= cutoff_30d:
+                result["funding_30d"] += i.income
+            if t >= cutoff_1d:
+                result["funding_1d"] += i.income
+
+    # 转换 set 为 count
+    result["symbols_traded"] = len(result["symbols_traded"])
+
+    # 四舍五入
+    for k in list(result.keys()):
+        if isinstance(result[k], float):
+            result[k] = round(result[k], 4)
+
+    _income_cache["data"] = result
+    _income_cache["time"] = now
+    return result
+
+
 def create_health_app(
     strategy_engine=None,
     position_manager=None,
@@ -209,6 +293,16 @@ def create_health_app(
             "scanner_score": round(target.scanner_score, 1),
             "reasons": target.scrape_reasons,
         }
+
+    @app.get("/health/pnl")
+    async def health_pnl():
+        """Binance 权威盈亏数据 (income API, 与交易所显示一致)."""
+        if order_executor is None:
+            return {"error": "订单执行器不可用"}
+        data = await _fetch_income_pnl(order_executor)
+        if data is None:
+            return {"error": "无法获取盈亏数据"}
+        return data
 
     @app.get("/health/account")
     async def health_account():
