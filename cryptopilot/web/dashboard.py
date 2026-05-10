@@ -63,6 +63,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .conn-dot.err { background: #f87171; }
   .conn-dot.warn { background: #fbbf24; }
   .conn-dot.pulse { animation: pulse 2s ease-in-out infinite; }
+  .perf-btn { background: #1e3a5f; color: #64748b; border: 1px solid #334155; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 0.72rem; }
+  .perf-btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .perf-btn:hover:not(.active) { background: #1e3a5f; color: #93c5fd; }
+  .daily-bar { display: inline-block; height: 20px; min-width: 2px; border-radius: 2px; margin: 0 1px; }
+  .daily-bar-pos { background: #34d399; }
+  .daily-bar-neg { background: #f87171; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   .value-big { font-size: 1.1rem; font-weight: 700; }
   .inline-stat { display: flex; justify-content: space-between; padding: 3px 0; font-size: 0.8rem; }
@@ -104,10 +110,16 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<!-- Row 3: Performance + Signal Log -->
+<!-- Row 3: Multi-period Performance -->
 <div class="grid">
   <div class="card">
-    <h2>交易绩效 <span class="hint" id="hint_perf"></span></h2>
+    <h2>交易绩效 <span class="hint" id="hint_perf">全部</span></h2>
+    <div style="display:flex; gap:6px;margin-bottom:10px;">
+      <button onclick="loadPeriod('all')" id="btn_all" class="perf-btn active">全部</button>
+      <button onclick="loadPeriod('today')" id="btn_today" class="perf-btn">今日</button>
+      <button onclick="loadPeriod('7d')" id="btn_7d" class="perf-btn">7天</button>
+      <button onclick="loadPeriod('30d')" id="btn_30d" class="perf-btn">30天</button>
+    </div>
     <div id="report">
       <div class="inline-stat"><span>交易次数</span><span>--</span></div>
       <div class="inline-stat"><span>胜率</span><span>--</span></div>
@@ -115,6 +127,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       <div class="inline-stat"><span>最大回撤</span><span>--</span></div>
       <div class="inline-stat"><span>夏普比率</span><span>--</span></div>
       <div class="inline-stat"><span>盈亏因子</span><span>--</span></div>
+      <div class="inline-stat"><span>手续费</span><span>--</span></div>
+      <div class="inline-stat"><span>资金费率</span><span>--</span></div>
     </div>
   </div>
 
@@ -136,6 +150,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- Row 5: Daily PnL Chart -->
+<div class="grid">
+  <div class="card">
+    <h2>每日盈亏走势 <span class="hint" id="hint_daily"></span></h2>
+    <div id="daily_pnl"><p style="text-align:center;padding:20px;color:#64748b;">等待数据...</p></div>
+  </div>
+</div>
+</div>
+
 <div class="footer">
   <span>CryptoPilot v1.3</span>
   <span>刷新间隔 10s | 最近更新: <span id="last_update">--</span></span>
@@ -144,7 +167,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <script>
 const REFRESH_MS = 10000;
 let countdown = REFRESH_MS / 1000;
-let refreshTimer = null;
+let currentPeriod = 'all';
 
 function fmtUSD(v) {
   const n = parseFloat(v);
@@ -275,32 +298,20 @@ async function load() {
     document.getElementById('positions').innerHTML = '<p class="error">持仓数据加载失败</p>';
   }
 
-  // ---- Performance ----
-  try {
-    const r = await fetch('/health/report/summary');
-    const d = await r.json();
-    if (!d.error) {
-      const pnl = parseFloat(d.total_pnl || 0);
-      let html = '';
-      html += '<div class="inline-stat"><span>交易次数</span><span>' + d.total_trades + '</span></div>';
-      html += '<div class="inline-stat"><span>胜率</span><span>' + d.win_rate + '%</span></div>';
-      html += '<div class="inline-stat"><span>总盈亏</span><span class="' + cn(pnl) + '">' + fmtUSD(pnl) + '</span></div>';
-      html += '<div class="inline-stat"><span>最大回撤</span><span>' + d.max_drawdown_pct + '%</span></div>';
-      html += '<div class="inline-stat"><span>夏普比率</span><span>' + d.sharpe_ratio + '</span></div>';
-      document.getElementById('report').innerHTML = html;
-    }
-  } catch(e) {}
+  // ---- Performance (period-aware) ----
+  await loadPeriod(currentPeriod, true);
 
   // ---- Trade History ----
   try {
     const r = await fetch('/health/trades');
     const d = await r.json();
     if (!d.error && d.trades && d.trades.length > 0) {
-      let html = '<div class="scroll-table"><table><tr><th>时间</th><th>币种</th><th>方向</th><th>价格</th><th>数量</th><th>手续费</th></tr>';
+      let html = '<div class="scroll-table"><table><tr><th>时间</th><th>币种</th><th>方向</th><th>价格</th><th>数量</th><th>手续费</th><th>策略</th></tr>';
       d.trades.slice(0, 30).forEach(t => {
         const side = (t.side || '').toUpperCase();
         const sideCls = side === 'BUY' ? 'badge-long' : 'badge-short';
         const tm = t.filled_at ? new Date(t.filled_at + 'Z').toLocaleTimeString() : '-';
+        const strat = (t.strategy_name || t.type || '-');
         html += '<tr>' +
           '<td class="nowrap">' + tm + '</td>' +
           '<td><strong>' + t.symbol + '</strong></td>' +
@@ -308,11 +319,31 @@ async function load() {
           '<td>' + fmtNum(t.price, 4) + '</td>' +
           '<td>' + fmtNum(t.qty) + '</td>' +
           '<td>' + fmtNum(t.commission, 4) + '</td>' +
+          '<td class="truncate" title="' + (strat) + '">' + (strat.length > 15 ? strat.slice(0,15)+'..' : strat) + '</td>' +
           '</tr>';
       });
       html += '</table></div>';
       document.getElementById('trade_history').innerHTML = html;
       document.getElementById('hint_trades').textContent = '共 ' + d.total + ' 笔';
+    }
+  } catch(e) {}
+
+  // ---- Daily PnL ----
+  try {
+    const r = await fetch('/health/report/30d');
+    const d = await r.json();
+    if (!d.error && d.daily_pnl && d.daily_pnl.length > 0) {
+      const bars = d.daily_pnl;
+      const maxAbs = Math.max(...bars.map(b => Math.abs(b.pnl)), 0.01);
+      let html = '<div style="display:flex;align-items:flex-end;gap:1px;height:80px;overflow-x:auto;padding:4px 0;">';
+      bars.forEach(b => {
+        const h = Math.max(4, (Math.abs(b.pnl) / maxAbs * 70));
+        const cls = b.pnl >= 0 ? 'daily-bar-pos' : 'daily-bar-neg';
+        html += '<div title="' + b.date + ': ' + fmtUSD(b.pnl) + ' (' + b.trades + '笔)" ' +
+          'class="daily-bar ' + cls + '" style="height:' + h + 'px;flex:0 0 12px;"></div>';
+      });
+      html += '</div><div style="font-size:0.65rem;color:#475569;margin-top:4px;text-align:center;">每日盈亏柱状图 (最近30天)</div>';
+      document.getElementById('daily_pnl').innerHTML = html;
     }
   } catch(e) {}
 
@@ -382,6 +413,59 @@ async function load() {
   } catch(e) {
     document.getElementById('signal_log').innerHTML = '<p class="error">加载失败</p>';
   }
+}
+
+async function loadPeriod(period, silent) {
+  currentPeriod = period;
+  // Update button states
+  document.querySelectorAll('.perf-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('btn_' + period);
+  if (btn) btn.classList.add('active');
+
+  const labelMap = { all: '全部', today: '今日', '7d': '7天', '30d': '30天' };
+  document.getElementById('hint_perf').textContent = labelMap[period] || period;
+
+  let url = '/health/report/summary';
+  if (period === 'today') url = '/health/report/today';
+  else if (period === '7d') url = '/health/report/7d';
+  else if (period === '30d') url = '/health/report/30d';
+
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!d.error) {
+      const pnl = parseFloat(d.total_pnl || 0);
+      let html = '';
+      html += '<div class="inline-stat"><span>交易次数</span><span>' + d.total_trades + '</span></div>';
+      html += '<div class="inline-stat"><span>胜率</span><span>' + d.win_rate + '%</span></div>';
+      html += '<div class="inline-stat"><span>总盈亏</span><span class="' + cn(pnl) + '">' + fmtUSD(pnl) + '</span></div>';
+      html += '<div class="inline-stat"><span>最大回撤</span><span>' + d.max_drawdown_pct + '%</span></div>';
+      html += '<div class="inline-stat"><span>夏普比率</span><span>' + d.sharpe_ratio + '</span></div>';
+      html += '<div class="inline-stat"><span>盈亏因子</span><span>' + (d.profit_factor || '-') + '</span></div>';
+      html += '<div class="inline-stat"><span>手续费</span><span>' + fmtUSD(d.total_commission || 0) + '</span></div>';
+      html += '<div class="inline-stat"><span>资金费率</span><span>' + fmtUSD(d.total_funding || 0) + '</span></div>';
+      document.getElementById('report').innerHTML = html;
+
+      // Update daily PnL if switching to 30d
+      if (!silent && period === '30d' && d.daily_pnl && d.daily_pnl.length > 0) {
+        renderDailyPnl(d.daily_pnl);
+      }
+    }
+  } catch(e) {}
+}
+
+function renderDailyPnl(bars) {
+  const maxAbs = Math.max(...bars.map(b => Math.abs(b.pnl)), 0.01);
+  let html = '<div style="display:flex;align-items:flex-end;gap:1px;height:80px;overflow-x:auto;padding:4px 0;">';
+  bars.forEach(b => {
+    const h = Math.max(4, (Math.abs(b.pnl) / maxAbs * 70));
+    const cls = b.pnl >= 0 ? 'daily-bar-pos' : 'daily-bar-neg';
+    html += '<div title="' + b.date + ': ' + fmtUSD(b.pnl) + ' (' + b.trades + '笔) ' +
+      '费率:' + fmtUSD(b.fee) + '" ' +
+      'class="daily-bar ' + cls + '" style="height:' + h + 'px;flex:0 0 12px;"></div>';
+  });
+  html += '</div><div style="font-size:0.65rem;color:#475569;margin-top:4px;text-align:center;">每日盈亏 + 费率 (最近30天) | 绿=盈利 红=亏损</div>';
+  document.getElementById('daily_pnl').innerHTML = html;
 }
 
 // Countdown timer

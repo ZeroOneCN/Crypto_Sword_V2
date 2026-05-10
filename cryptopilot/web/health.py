@@ -132,10 +132,31 @@ def create_health_app(
 
     @app.get("/health/report/summary")
     async def health_report_summary():
-        """Return lightweight performance summary."""
+        """Return lightweight performance summary (all-time)."""
         if report_generator is None:
             return {"error": "Report generator not available"}
         return await report_generator.generate_summary()
+
+    @app.get("/health/report/today")
+    async def health_report_today():
+        """今日绩效."""
+        if report_generator is None:
+            return {"error": "Report generator not available"}
+        return await report_generator.generate_summary(days=1)
+
+    @app.get("/health/report/7d")
+    async def health_report_7d():
+        """近7天绩效."""
+        if report_generator is None:
+            return {"error": "Report generator not available"}
+        return await report_generator.generate_summary(days=7)
+
+    @app.get("/health/report/30d")
+    async def health_report_30d():
+        """近30天绩效."""
+        if report_generator is None:
+            return {"error": "Report generator not available"}
+        return await report_generator.generate_summary(days=30)
 
     @app.get("/health/candidates")
     async def health_candidates():

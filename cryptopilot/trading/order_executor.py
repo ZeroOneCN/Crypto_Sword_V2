@@ -83,6 +83,106 @@ class AccountInfo:
     margin_ratio: float
 
 
+@dataclass
+class HistoryOrder:
+    """Historical order from exchange."""
+    symbol: str
+    order_id: int
+    client_order_id: str
+    side: str
+    order_type: str
+    status: str
+    price: float
+    orig_qty: float
+    executed_qty: float
+    avg_price: float
+    cum_quote: float   # cumulative quote cost = SUM(fill_price * fill_qty)
+    stop_price: float
+    time: int          # ms
+    update_time: int   # ms
+    position_side: str
+    reduce_only: bool
+
+    @classmethod
+    def from_ws(cls, raw: dict) -> "HistoryOrder":
+        return cls(
+            symbol=raw.get("symbol", ""),
+            order_id=int(raw.get("orderId", 0)),
+            client_order_id=raw.get("clientOrderId", ""),
+            side=raw.get("side", ""),
+            order_type=raw.get("type", ""),
+            status=raw.get("status", ""),
+            price=float(raw.get("price", 0)),
+            orig_qty=float(raw.get("origQty", 0)),
+            executed_qty=float(raw.get("executedQty", 0)),
+            avg_price=float(raw.get("avgPrice", 0)),
+            cum_quote=float(raw.get("cumQuote", 0)),
+            stop_price=float(raw.get("stopPrice", 0)),
+            time=int(raw.get("time", 0)),
+            update_time=int(raw.get("updateTime", 0)),
+            position_side=raw.get("positionSide", "BOTH"),
+            reduce_only=raw.get("reduceOnly", False),
+        )
+
+
+@dataclass
+class HistoryTrade:
+    """Historical trade/fill from exchange."""
+    symbol: str
+    order_id: int
+    trade_id: int
+    side: str
+    price: float
+    qty: float
+    commission: float
+    commission_asset: str
+    realized_pnl: float
+    time: int         # ms
+    position_side: str
+    buyer: bool
+
+    @classmethod
+    def from_ws(cls, raw: dict) -> "HistoryTrade":
+        return cls(
+            symbol=raw.get("symbol", ""),
+            order_id=int(raw.get("orderId", 0)),
+            trade_id=int(raw.get("id", 0)),
+            side=raw.get("side", ""),
+            price=float(raw.get("price", 0)),
+            qty=float(raw.get("qty", 0)),
+            commission=float(raw.get("commission", 0)),
+            commission_asset=raw.get("commissionAsset", ""),
+            realized_pnl=float(raw.get("realizedPnl", 0)),
+            time=int(raw.get("time", 0)),
+            position_side=raw.get("positionSide", "BOTH"),
+            buyer=raw.get("buyer", False),
+        )
+
+
+@dataclass
+class IncomeEntry:
+    """PnL income entry from Binance income history."""
+    symbol: str
+    income_type: str        # REALIZED_PNL, COMMISSION, FUNDING_FEE, etc.
+    income: float
+    asset: str
+    info: str              # trade summary
+    time: int              # ms
+    trade_id: int
+
+    @classmethod
+    def from_ws(cls, raw: dict) -> "IncomeEntry":
+        return cls(
+            symbol=raw.get("symbol", ""),
+            income_type=raw.get("incomeType", ""),
+            income=float(raw.get("income", 0)),
+            asset=raw.get("asset", ""),
+            info=raw.get("info", ""),
+            time=int(raw.get("time", 0)),
+            trade_id=int(raw.get("tranId", 0)),
+        )
+
+
 class OrderExecutor:
     """Async wrapper around Binance REST API for trading."""
 
@@ -445,6 +545,58 @@ class OrderExecutor:
             unrealized_pnl=float(raw.get("totalUnrealizedProfit", raw.get("unrealizedPnl", 0))),
             margin_ratio=float(raw.get("marginRatio", 0)),
         )
+
+    # ---- 历史数据拉取 ----
+
+    async def get_order_history(
+        self, symbol: str, start_time: int | None = None,
+        end_time: int | None = None, limit: int = 500,
+    ) -> list[HistoryOrder]:
+        """拉取历史订单 (包含已成交/已取消)."""
+        params: dict = {"symbol": symbol, "limit": limit}
+        if start_time:
+            params["startTime"] = start_time
+        if end_time:
+            params["endTime"] = end_time
+        raw = await self._signed_request("GET", "/fapi/v1/allOrders", params)
+        if not isinstance(raw, list):
+            return []
+        return [HistoryOrder.from_ws(r) for r in raw]
+
+    async def get_trade_history(
+        self, symbol: str, start_time: int | None = None,
+        end_time: int | None = None, limit: int = 500,
+    ) -> list[HistoryTrade]:
+        """拉取历史成交 (userTrades)."""
+        params: dict = {"symbol": symbol, "limit": limit}
+        if start_time:
+            params["startTime"] = start_time
+        if end_time:
+            params["endTime"] = end_time
+        raw = await self._signed_request("GET", "/fapi/v1/userTrades", params)
+        if not isinstance(raw, list):
+            return []
+        return [HistoryTrade.from_ws(r) for r in raw]
+
+    async def get_income_history(
+        self, symbol: str | None = None, start_time: int | None = None,
+        end_time: int | None = None, limit: int = 500,
+        income_type: str | None = None,
+    ) -> list[IncomeEntry]:
+        """拉取盈亏流水 (income). income_type: REALIZED_PNL, COMMISSION, FUNDING_FEE, etc."""
+        params: dict = {"limit": limit}
+        if symbol:
+            params["symbol"] = symbol
+        if start_time:
+            params["startTime"] = start_time
+        if end_time:
+            params["endTime"] = end_time
+        if income_type:
+            params["incomeType"] = income_type
+        raw = await self._signed_request("GET", "/fapi/v1/income", params)
+        if not isinstance(raw, list):
+            return []
+        return [IncomeEntry.from_ws(r) for r in raw]
 
     async def set_leverage(self, symbol: str, leverage: int) -> dict:
         """Set leverage for a symbol (futures only)."""

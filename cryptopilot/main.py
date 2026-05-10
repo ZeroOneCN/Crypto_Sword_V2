@@ -274,6 +274,88 @@ async def main() -> None:
         f"{len(await order_manager.get_open_orders())} 个挂单"
     )
 
+    # ---- 历史数据同步 (从 Binance 拉取历史成交) ----
+    from cryptopilot.trading.order_executor import HistoryTrade
+
+    async def sync_trade_history():
+        """从 Binance 拉取近 90 天历史成交, 回填 fills + orders 表."""
+        try:
+            # 检查 fills 表是否已有数据 (已同步过则跳过)
+            existing_count_row = await db.fetch_all("SELECT COUNT(*) as cnt FROM fills", ())
+            existing_count = existing_count_row[0].get("cnt", 0) if existing_count_row else 0
+            if existing_count > 100:
+                logger.info(f"fills 表已有 {existing_count} 条记录, 跳过全量历史同步")
+                return
+
+            symbols_to_sync: set[str] = set()
+            for pos in position_manager.get_all_positions():
+                sym = pos.get("symbol", "")
+                if sym:
+                    symbols_to_sync.add(sym)
+
+            if not symbols_to_sync:
+                recent_orders = await order_repo.get_history(limit=20)
+                for o in recent_orders:
+                    sym = o.get("symbol", "")
+                    if sym:
+                        symbols_to_sync.add(sym)
+
+            if not symbols_to_sync:
+                logger.info("无历史数据需同步")
+                return
+
+            end_time = int(time.time() * 1000)
+            start_time = end_time - 90 * 86400 * 1000
+
+            total_fills = 0
+            for sym in list(symbols_to_sync)[:20]:
+                try:
+                    trades = await order_executor.get_trade_history(
+                        symbol=sym, start_time=start_time, end_time=end_time, limit=500,
+                    )
+                    if not trades:
+                        continue
+
+                    for t in trades:
+                        try:
+                            created = datetime.fromtimestamp(
+                                t.time / 1000, tz=timezone.utc
+                            ).isoformat()
+                            order_db_id = await order_repo.upsert_history_order(
+                                symbol=t.symbol, side=t.side, order_type="MARKET",
+                                exchange_order_id=str(t.order_id),
+                                price=t.price, orig_qty=t.qty,
+                                executed_qty=t.qty, avg_price=t.price,
+                                pos_side=t.position_side, created_at=created,
+                            )
+                            # 记录 fill (INSERT OR IGNORE 风格 — 如果同订单已有则跳过)
+                            existing_fills = await db.fetch_all(
+                                "SELECT id FROM fills WHERE order_id = ? AND price = ? AND qty = ?",
+                                (order_db_id, t.price, t.qty),
+                            )
+                            if not existing_fills:
+                                await order_manager.record_fill(
+                                    order_db_id=order_db_id,
+                                    price=t.price, qty=t.qty,
+                                    commission=t.commission,
+                                    asset=t.commission_asset,
+                                )
+                                total_fills += 1
+                        except Exception:
+                            pass
+
+                    logger.info(f"历史同步: {sym} {len(trades)} 笔成交")
+                except Exception:
+                    logger.debug(f"历史同步跳过 {sym}")
+
+            if total_fills > 0:
+                logger.info(f"历史数据同步完成: 新增 {total_fills} 条成交记录")
+        except Exception:
+            logger.exception("历史数据同步异常 (非致命)")
+
+    # 启动后台同步 (不阻塞)
+    asyncio.create_task(sync_trade_history(), name="history_sync")
+
     # ---- 信号日志 (用于 Web 展示) ----
     from cryptopilot.web.health import add_signal_log
 

@@ -88,6 +88,31 @@ class OrderRepository:
             (limit,),
         )
 
+    async def upsert_history_order(
+        self, symbol: str, side: str, order_type: str,
+        exchange_order_id: str, price: float, orig_qty: float,
+        executed_qty: float, avg_price: float, pos_side: str,
+        status: str = "FILLED", created_at: str = "", updated_at: str = "",
+        strategy_name: str = "history_sync",
+    ) -> int:
+        """插入或跳过历史订单 (按 exchange_order_id 去重)."""
+        from cryptopilot.persistence.models import OrderRecord
+        now = created_at or iso_now()
+        client_oid = f"history_{exchange_order_id}"
+
+        existing = await self.get_by_client_id(client_oid)
+        if existing:
+            return existing["id"]
+
+        rec = OrderRecord(
+            symbol=symbol, strategy_name=strategy_name,
+            side=side, type=order_type, price=price, orig_qty=orig_qty,
+            executed_qty=executed_qty, status=status,
+            client_order_id=client_oid, exchange_order_id=str(exchange_order_id),
+            pos_side=pos_side, created_at=now, updated_at=now,
+        )
+        return await self.create(rec)
+
 
 class FillRepository:
     """CRUD for fills table."""
