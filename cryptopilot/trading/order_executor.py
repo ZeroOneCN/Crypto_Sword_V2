@@ -714,6 +714,21 @@ class OrderExecutor:
         """公开方法: 获取币种的交易精度过滤器 (step_size, tick_size 等)."""
         return self._symbol_info.get(symbol)
 
+    async def get_ticker_price(self, symbol: str) -> float | None:
+        """获取币种最新价 (公开端点, 无权重消耗)."""
+        import aiohttp
+        base = self._build_base_url().replace("https://", "https://")
+        url = f"{base}/ticker/price?symbol={symbol}"
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url, timeout=aiohttp.ClientTimeout(total=5)) as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        return float(data.get("price", 0))
+        except Exception:
+            pass
+        return None
+
     # ----------------------------------------------------------------
     # Internal — URL selection
     # ----------------------------------------------------------------
