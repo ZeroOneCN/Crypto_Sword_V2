@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+import time
+from datetime import datetime, timezone
 
 from loguru import logger
 
@@ -188,22 +190,42 @@ async def main() -> None:
             proxy=proxy_url,
         )
 
-        async def _on_order_update(event: dict):
-            """WS 推送的订单状态变更 → 更新本地订单簿."""
+        async def _on_order_update(event):
+            """WS 推送的订单状态变更 → 更新本地订单簿 + 必要时同步持仓."""
             try:
-                o = event.get("o", event)
-                cid = o.get("c", "")  # clientOrderId
-                status = o.get("X", "")
-                executed = float(o.get("z", 0))
+                cid = event.client_order_id
+                status = event.order_status
+                executed = event.executed_qty
                 if cid:
                     await order_manager.update_order(cid, status, executed)
+                # 订单完全成交 → 异步同步持仓/账户 (限流: 3s 内最多一次)
+                if status == "FILLED":
+                    now = time.time()
+                    if now - getattr(_on_order_update, "_last_sync", 0) > 3.0:
+                        _on_order_update._last_sync = now
+                        await position_manager.sync_from_exchange(order_executor)
+                        # 记录信号日志: 成交
+                        from cryptopilot.web.health import add_signal_log
+                        add_signal_log({
+                            "time": datetime.now(tz=timezone.utc).isoformat(),
+                            "symbol": event.symbol,
+                            "action": f"FILLED_{event.side}",
+                            "score": round(event.executed_qty, 4),
+                            "detail": f"成交 {event.executed_qty}/{event.orig_qty} @{event.avg_price:.4f} 手续费={event.commission}",
+                        })
             except Exception:
                 logger.exception("WS 订单更新处理异常")
 
-        async def _on_account_update(event: dict):
-            """WS 推送的账户/仓位变动 → 同步持仓."""
+        async def _on_account_update(event):
+            """WS 推送的账户/仓位变动 → 同步持仓 (仅同步 WS 推送的仓位变化)."""
             try:
-                await position_manager.sync_from_exchange(order_executor)
+                if hasattr(event, "positions") and event.positions:
+                    for pos_data in event.positions:
+                        sym = pos_data.get("symbol", "")
+                        if sym:
+                            logger.debug(f"WS 仓位变动: {sym} {pos_data.get('ps', '')}")
+                    # 全量同步 (轻量, 因为账户更新本身不频繁)
+                    await position_manager.sync_from_exchange(order_executor)
             except Exception:
                 logger.exception("WS 账户更新处理异常")
 
