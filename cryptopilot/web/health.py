@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from loguru import logger
 
 
 # 全局信号日志 (环形缓冲区, 最多保留 200 条)

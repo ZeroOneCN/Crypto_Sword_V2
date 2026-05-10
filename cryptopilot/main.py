@@ -1272,9 +1272,9 @@ async def _execute_signal(
                         position_side=pos_side,
                         client_order_id=_make_client_id("sl"),
                     )
-                    sl_r = await executor.create_algo_order(sl_req)
+                    sl_r = await executor.create_order(sl_req)
                     sl_success = sl_r.order_id > 0
-                    logger.info(f"SL 已挂单: {signal.symbol} @{sl_price:.5f} algoId={sl_r.order_id}")
+                    logger.info(f"SL 已挂单: {signal.symbol} @{sl_price:.5f} orderId={sl_r.order_id}")
                 except Exception as exc:
                     logger.error(f"SL 挂单失败: {signal.symbol} {exc}")
         tp_count = 0
