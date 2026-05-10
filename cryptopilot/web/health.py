@@ -517,6 +517,7 @@ def create_health_app(
           - side: LONG 或 SHORT (默认 LONG)
         """
         from cryptopilot.strategy.base import Signal
+        from loguru import logger
         import traceback
 
         try:
