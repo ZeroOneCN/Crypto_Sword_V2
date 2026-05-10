@@ -72,6 +72,7 @@ class PositionInfo:
     leverage: int
     liquidation_price: float
     unrealized_pnl: float
+    margin_type: str = ""
 
 
 @dataclass
@@ -81,6 +82,7 @@ class AccountInfo:
     available_balance: float
     unrealized_pnl: float
     margin_ratio: float
+    margin_type: str = ""
 
 
 @dataclass
@@ -568,6 +570,7 @@ class OrderExecutor:
             available_balance=float(raw.get("availableBalance", 0)),
             unrealized_pnl=float(raw.get("totalUnrealizedProfit", raw.get("unrealizedPnl", 0))),
             margin_ratio=float(raw.get("marginRatio", 0)),
+            margin_type=raw.get("marginType", ""),
         )
 
     # ---- 历史数据拉取 ----
@@ -785,6 +788,7 @@ class OrderExecutor:
             leverage=int(float(raw.get("leverage", 1))),
             liquidation_price=float(raw.get("liquidationPrice", 0) or 0),
             unrealized_pnl=float(raw.get("unRealizedProfit", raw.get("unrealizedPnl", 0))),
+            margin_type=raw.get("marginType", ""),
         )
 
 

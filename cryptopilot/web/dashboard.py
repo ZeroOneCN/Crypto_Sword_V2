@@ -1,4 +1,4 @@
-"""Dashboard HTML page — served by FastAPI, polls health APIs for live status."""
+"""仪表盘 HTML — CryptoPilot V2 驾驶舱."""
 
 from __future__ import annotations
 
@@ -11,497 +11,367 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CryptoPilot — 驾驶舱</title>
+<title>CryptoPilot V2 · 驾驶舱</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0b1120; color: #e2e8f0; padding: 16px 20px; min-height: 100vh; }
-  h1 { font-size: 1.3rem; margin-bottom: 16px; color: #38bdf8; display: flex; align-items: center; gap: 12px; }
-  h1 small { font-size: 0.7rem; color: #475569; font-weight: normal; margin-left: auto; }
-  .top-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-  .stat-card { background: #111c2e; border: 1px solid #1e3a5f; border-radius: 8px; padding: 12px 18px; flex: 1; min-width: 140px; text-align: center; }
-  .stat-card .label { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
-  .stat-card .value { font-size: 1.4rem; font-weight: 700; }
-  .stat-card .sub { font-size: 0.7rem; color: #64748b; margin-top: 2px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 14px; margin-bottom: 14px; }
-  .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
-  .card { background: #111c2e; border-radius: 8px; padding: 14px; border: 1px solid #1e293b; }
-  .card h2 { font-size: 0.82rem; color: #94a3b8; margin-bottom: 10px; letter-spacing: 0.04em; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 8px; }
-  .card h2 .hint { font-weight: normal; font-size: 0.7rem; color: #475569; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.68rem; font-weight: 600; }
-  .badge-ok { background: #065f46; color: #6ee7b7; }
-  .badge-warn { background: #78350f; color: #fbbf24; }
-  .badge-err { background: #7f1d1d; color: #fca5a5; }
-  .badge-info { background: #1e3a5f; color: #93c5fd; }
-  .badge-long { background: #064e3b; color: #34d399; }
-  .badge-short { background: #7f1d1d; color: #fb7185; }
-  .badge-hold { background: #1e293b; color: #64748b; border: 1px solid #334155; }
-  .badge-purple { background: #4a1942; color: #e879f9; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
-  th, td { padding: 5px 7px; text-align: left; border-bottom: 1px solid #1a2332; }
-  th { color: #64748b; font-weight: 600; font-size: 0.7rem; text-transform: uppercase; }
-  tr:hover td { background: #0f172a60; }
-  .pnl-pos { color: #4ade80; }
-  .pnl-neg { color: #f87171; }
-  .zero { color: #64748b; }
-  .footer { display: flex; justify-content: space-between; align-items: center; font-size: 0.68rem; color: #334155; margin-top: 8px; }
-  .footer .refresh { color: #38bdf8; cursor: pointer; }
-  .error { color: #f87171; font-size: 0.8rem; }
-  .factor-bar { display: inline-flex; align-items: center; gap: 1px; }
-  .factor-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-  .factor-dot-long { background: #34d399; }
-  .factor-dot-short { background: #fb7185; }
-  .factor-dot-neutral { background: #334155; }
-  .signal-row { border-left: 3px solid transparent; }
-  .signal-row.LONG { border-left-color: #34d399; }
-  .signal-row.SHORT { border-left-color: #fb7185; }
-  .signal-row.HOLD { border-left-color: #475569; }
-  .nowrap { white-space: nowrap; }
-  .truncate { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .scroll-table { overflow-x: auto; max-height: 280px; overflow-y: auto; }
-  .conn-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 4px; }
-  .conn-dot.ok { background: #4ade80; }
-  .conn-dot.err { background: #f87171; }
-  .conn-dot.warn { background: #fbbf24; }
-  .conn-dot.pulse { animation: pulse 2s ease-in-out infinite; }
-  .perf-btn { background: #1e3a5f; color: #64748b; border: 1px solid #334155; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 0.72rem; }
-  .perf-btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
-  .perf-btn:hover:not(.active) { background: #1e3a5f; color: #93c5fd; }
-  .daily-bar { display: inline-block; height: 20px; min-width: 2px; border-radius: 2px; margin: 0 1px; }
-  .daily-bar-pos { background: #34d399; }
-  .daily-bar-neg { background: #f87171; }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-  .value-big { font-size: 1.1rem; font-weight: 700; }
-  .inline-stat { display: flex; justify-content: space-between; padding: 3px 0; font-size: 0.8rem; }
-  .inline-stat span:last-child { font-weight: 600; }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0f1a;color:#c9d1d9;padding:14px 18px;min-height:100vh}
+  h1{font-size:1.25rem;margin-bottom:12px;color:#58a6ff;display:flex;align-items:center;gap:10px}
+  h1 small{font-size:.65rem;color:#484f58;font-weight:400;margin-left:auto}
+  .top-bar{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+  .stat-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:10px 14px;flex:1;min-width:120px;text-align:center;transition:border-color .2s}
+  .stat-card:hover{border-color:#30363d}
+  .stat-card .label{font-size:.65rem;color:#8b949e;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px}
+  .stat-card .value{font-size:1.3rem;font-weight:700}
+  .stat-card .sub{font-size:.62rem;color:#484f58;margin-top:2px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:12px;margin-bottom:12px}
+  .card{background:#161b22;border-radius:8px;padding:12px;border:1px solid #21262d}
+  .card h2{font-size:.78rem;color:#8b949e;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #21262d;padding-bottom:7px}
+  .card h2 .hint{font-weight:400;font-size:.65rem;color:#484f58}
+  .badge{display:inline-block;padding:2px 7px;border-radius:3px;font-size:.65rem;font-weight:600}
+  .badge-ok{background:#0d3322;color:#3fb950}.badge-warn{background:#3b2200;color:#d2991d}
+  .badge-err{background:#3b1015;color:#f85149}.badge-info{background:#1a2b4c;color:#79c0ff}
+  .badge-long{background:#0d3322;color:#3fb950}.badge-short{background:#3b1015;color:#f85149}
+  .badge-purple{background:#2d1140;color:#d2a8ff}.badge-teal{background:#0d2e2e;color:#39d2c0}
+  table{width:100%;border-collapse:collapse;font-size:.73rem}
+  th,td{padding:5px 7px;text-align:left;border-bottom:1px solid #1a1f2b}
+  th{color:#8b949e;font-weight:600;font-size:.68rem;text-transform:uppercase}
+  tr:hover td{background:#1c212950}
+  .pnl-pos{color:#3fb950}.pnl-neg{color:#f85149}.zero{color:#484f58}
+  .footer{display:flex;justify-content:space-between;align-items:center;font-size:.63rem;color:#30363d;margin-top:6px}
+  .footer .refresh{color:#58a6ff;cursor:pointer}
+  .error{color:#f85149;font-size:.75rem}
+  .scroll-table{overflow-x:auto;max-height:260px;overflow-y:auto}
+  .conn-dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px}
+  .conn-dot.ok{background:#3fb950}.conn-dot.err{background:#f85149}
+  .conn-dot.warn{background:#d2991d}.conn-dot.pulse{animation:pulse 2s ease-in-out infinite}
+  .nowrap{white-space:nowrap}.truncate{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .value-big{font-size:1.05rem;font-weight:700}
+  .inline-stat{display:flex;justify-content:space-between;padding:3px 0;font-size:.75rem}
+  .inline-stat span:last-child{font-weight:600}
+  .daily-bar{display:inline-block;height:20px;min-width:2px;border-radius:2px;margin:0 1px}
+  .daily-bar-pos{background:#3fb950}.daily-bar-neg{background:#f85149}
+  .tag{margin:1px 2px;display:inline-block}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+  .label-tag{font-size:.62rem;color:#8b949e;background:#21262d;padding:1px 5px;border-radius:3px;margin-right:3px}
 </style>
 </head>
 <body>
 <h1>
-  CryptoPilot 驾驶舱
+  ⚡ CryptoPilot V2 · 驾驶舱
   <small id="timestamp">Loading...</small>
 </h1>
 
-<!-- Row 1: Account Stats Bar -->
 <div class="top-bar" id="account_bar">
-  <div class="stat-card"><div class="label">总余额</div><div class="value" style="color:#e2e8f0">--</div><div class="sub">USDT</div></div>
-  <div class="stat-card"><div class="label">可用余额</div><div class="value" style="color:#93c5fd">--</div><div class="sub">可开仓</div></div>
-  <div class="stat-card"><div class="label">未实现盈亏</div><div class="value" id="stat_upnl">--</div><div class="sub">浮动</div></div>
+  <div class="stat-card"><div class="label">总余额</div><div class="value">--</div><div class="sub">USDT</div></div>
+  <div class="stat-card"><div class="label">可用</div><div class="value" style="color:#79c0ff">--</div><div class="sub">可开仓</div></div>
+  <div class="stat-card"><div class="label">浮动盈亏</div><div class="value" id="stat_upnl">--</div><div class="sub">未实现</div></div>
   <div class="stat-card"><div class="label">保证金率</div><div class="value" id="stat_margin">--</div><div class="sub">越低越安全</div></div>
-  <div class="stat-card"><div class="label">持仓数</div><div class="value" id="stat_poscount" style="color:#a78bfa">--</div><div class="sub">已开 / 上限</div></div>
-  <div class="stat-card"><div class="label">风控状态</div><div class="value" id="stat_cb" style="font-size:1rem">--</div><div class="sub">熔断 / 正常</div></div>
+  <div class="stat-card"><div class="label">保证金模式</div><div class="value" id="stat_mtype" style="font-size:1rem">--</div><div class="sub">逐仓/全仓</div></div>
+  <div class="stat-card"><div class="label">持仓</div><div class="value" id="stat_poscount" style="color:#d2a8ff">--</div><div class="sub">已开/上限</div></div>
+  <div class="stat-card"><div class="label">风控</div><div class="value" id="stat_cb" style="font-size:1rem">--</div><div class="sub">熔断/正常</div></div>
 </div>
 
-<!-- Row 2: System Status + Positions -->
 <div class="grid">
   <div class="card">
-    <h2>系统 & 风控 <span class="hint" id="hint_sys"></span></h2>
+    <h2>系统状态 <span class="hint" id="hint_sys"></span></h2>
     <div class="inline-stat"><span>行情源</span><span id="sys_ws">--</span></div>
+    <div class="inline-stat"><span>策略预设</span><span id="sys_preset">--</span></div>
+    <div class="inline-stat"><span>评分阈值</span><span id="sys_threshold">--</span></div>
     <div class="inline-stat"><span>熔断</span><span id="sys_cb">--</span></div>
-    <div class="inline-stat"><span>当日净盈亏</span><span id="sys_daily_pnl">--</span></div>
-    <div class="inline-stat"><span>保证金率</span><span id="sys_margin_ratio">--</span></div>
+    <div class="inline-stat"><span>当日盈亏</span><span id="sys_daily_pnl">--</span></div>
+    <div class="inline-stat"><span>候选池</span><span id="sys_pool">--</span></div>
+    <div class="inline-stat"><span>保护单</span><span id="sys_orders">--</span></div>
     <div class="inline-stat"><span>保证金监控</span><span id="sys_margin_mon">--</span></div>
-    <div class="inline-stat"><span>候选池 / 扫描</span><span id="sys_pool">--</span></div>
-    <div class="inline-stat"><span>挂单 (保护单)</span><span id="sys_orders">--</span></div>
   </div>
 
   <div class="card">
     <h2>当前持仓 <span class="hint" id="hint_pos"></span></h2>
-    <div id="positions"><div class="scroll-table"><table><tr><th>币种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th><th>ROI</th><th>保护单</th></tr></table></div><p style="text-align:center;padding:20px;color:#64748b;">暂无持仓</p></div>
+    <div id="positions"><p style="text-align:center;padding:18px;color:#484f58;">暂无持仓</p></div>
   </div>
 </div>
 
-<!-- Row 3: Multi-period Performance -->
 <div class="grid">
   <div class="card">
-    <h2>交易绩效 (Binance) <span class="hint" id="hint_perf"></span></h2>
+    <h2>交易绩效 (Binance 权威) <span class="hint" id="hint_perf"></span></h2>
     <div id="report">
-      <div class="inline-stat"><span>7天盈亏</span><span>--</span></div>
-      <div class="inline-stat"><span>30天盈亏</span><span>--</span></div>
-      <div class="inline-stat"><span>累计盈亏</span><span>--</span></div>
-      <div class="inline-stat"><span>7天手续费</span><span>--</span></div>
-      <div class="inline-stat"><span>7天资金费率</span><span>--</span></div>
-      <div class="inline-stat"><span>今日盈亏</span><span>--</span></div>
+      <div class="inline-stat"><span>7天净盈亏</span><span>--</span></div>
+      <div class="inline-stat"><span>30天净盈亏</span><span>--</span></div>
+      <div class="inline-stat"><span>累计净盈亏</span><span>--</span></div>
+      <div class="inline-stat"><span>今日净盈亏</span><span>--</span></div>
+      <div class="inline-stat"><span>手续费</span><span>--</span></div>
+      <div class="inline-stat"><span>资金费率</span><span>--</span></div>
     </div>
   </div>
 
   <div class="card">
     <h2>信号日志 <span class="hint" id="hint_sig"></span></h2>
-    <div id="signal_log"><p style="text-align:center;padding:20px;color:#64748b;">暂无信号 — 评分未达阈值</p></div>
+    <div id="signal_log"><p style="text-align:center;padding:18px;color:#484f58;">暂无信号</p></div>
   </div>
 </div>
 
-<!-- Row 4: Scoring Detail + Trade History -->
 <div class="grid">
   <div class="card">
     <h2>候选池评分明细 <span class="hint">Top-5 多因子投票</span></h2>
-    <div id="scoring_detail"><p style="text-align:center;padding:20px;color:#64748b;">暂无候选 — 等待扫描器产出</p></div>
+    <div id="scoring_detail"><p style="text-align:center;padding:18px;color:#484f58;">等待扫描器产出</p></div>
   </div>
   <div class="card">
-    <h2>成交记录 <span class="hint" id="hint_trades"></span></h2>
-    <div id="trade_history"><p style="text-align:center;padding:20px;color:#64748b;">暂无成交记录</p></div>
+    <h2>近期成交 <span class="hint" id="hint_trades"></span></h2>
+    <div id="trade_history"><p style="text-align:center;padding:18px;color:#484f58;">暂无成交</p></div>
   </div>
 </div>
 
-<!-- Row 5: Daily PnL Chart -->
 <div class="grid">
   <div class="card">
     <h2>每日盈亏走势 <span class="hint" id="hint_daily"></span></h2>
-    <div id="daily_pnl"><p style="text-align:center;padding:20px;color:#64748b;">等待数据...</p></div>
+    <div id="daily_pnl"><p style="text-align:center;padding:18px;color:#484f58;">等待数据...</p></div>
   </div>
-</div>
 </div>
 
 <div class="footer">
-  <span>CryptoPilot v1.3</span>
-  <span>刷新间隔 5s | 最近更新: <span id="last_update">--</span></span>
+  <span>CryptoPilot V2 · 多因子评分引擎</span>
+  <span>5s刷新 · 更新: <span id="last_update">--</span></span>
 </div>
 
 <script>
-const REFRESH_MS = 5000;
-let countdown = REFRESH_MS / 1000;
-function esc(s) {
-  if (typeof s !== 'string') return s;
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-function fmtUSD(v) {
-  const n = parseFloat(v);
-  if (isNaN(n)) return '--';
-  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-function fmtPct(v) {
-  const n = parseFloat(v);
-  if (isNaN(n)) return '--';
-  return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
-}
-function fmtNum(v, d) {
-  d = d || 2;
-  const n = parseFloat(v);
-  if (isNaN(n)) return '--';
-  return n.toFixed(d);
-}
-function cn(v, pos, neg) {
-  const n = parseFloat(v);
-  if (isNaN(n) || n === 0) return 'zero';
-  return n > 0 ? (pos || 'pnl-pos') : (neg || 'pnl-neg');
-}
-// HTML 转义: 防止 XSS 注入
-function esc(s) {
-  if (typeof s !== 'string') s = String(s);
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
+const REFRESH_MS=5000;let countdown=REFRESH_MS/1000;
+function esc(s){if(typeof s!=='string')s=String(s);return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
+function fmtUSD(v){const n=parseFloat(v);if(isNaN(n))return'--';return'$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
+function fmtPct(v){const n=parseFloat(v);if(isNaN(n))return'--';return(n>=0?'+':'')+n.toFixed(2)+'%'}
+function fmtNum(v,d){d=d||2;const n=parseFloat(v);if(isNaN(n))return'--';return n.toFixed(d)}
+function cn(v){const n=parseFloat(v);if(isNaN(n)||n===0)return'zero';return n>0?'pnl-pos':'pnl-neg'}
+function marginLabel(t){return t==='ISOLATED'||t==='isolated'?'🔒 逐仓':'🌐 全仓'}
 
-async function load() {
-  const now = new Date();
-  document.getElementById('timestamp').textContent = now.toLocaleString();
-  document.getElementById('last_update').textContent = now.toLocaleTimeString();
+async function load(){
+  const now=new Date();
+  document.getElementById('timestamp').textContent=now.toLocaleString();
+  document.getElementById('last_update').textContent=now.toLocaleTimeString();
+  countdown=REFRESH_MS/1000;
 
-  // Reset countdown
-  countdown = REFRESH_MS / 1000;
-  document.getElementById('timestamp').textContent = now.toLocaleString() + ' (下次刷新: ' + countdown + 's)';
-
-  // ---- Account ----
-  try {
-    const r = await fetch('/health/account');
-    const d = await r.json();
-    if (!d.error) {
-      const cards = document.querySelectorAll('#account_bar .stat-card');
-      cards[0].querySelector('.value').textContent = fmtUSD(d.total_balance).replace('$','');
-      cards[1].querySelector('.value').textContent = fmtUSD(d.available_balance).replace('$','');
-      const upnlEl = document.getElementById('stat_upnl');
-      upnlEl.textContent = fmtUSD(d.unrealized_pnl);
-      upnlEl.style.color = d.unrealized_pnl >= 0 ? '#4ade80' : '#f87171';
-      const mrEl = document.getElementById('stat_margin');
-      const mrPct = (d.margin_ratio || 0) * 100;
-      mrEl.textContent = mrPct.toFixed(2) + '%';
-      mrEl.style.color = mrPct > 80 ? '#f87171' : mrPct > 50 ? '#fbbf24' : '#4ade80';
+  // Account
+  try{
+    const r=await fetch('/health/account');const d=await r.json();
+    if(!d.error){
+      const cards=document.querySelectorAll('#account_bar .stat-card');
+      cards[0].querySelector('.value').textContent=fmtUSD(d.total_balance).replace('$','');
+      cards[1].querySelector('.value').textContent=fmtUSD(d.available_balance).replace('$','');
+      const upnl=document.getElementById('stat_upnl');
+      upnl.textContent=fmtUSD(d.unrealized_pnl);
+      upnl.style.color=d.unrealized_pnl>=0?'#3fb950':'#f85149';
+      const mr=document.getElementById('stat_margin');
+      const mrPct=(d.margin_ratio||0)*100;
+      mr.textContent=mrPct.toFixed(2)+'%';
+      mr.style.color=mrPct>80?'#f85149':mrPct>50?'#d2991d':'#3fb950';
+      document.getElementById('stat_mtype').textContent=marginLabel(d.margin_type||'cross');
     }
-  } catch(e) {}
+  }catch(e){}
 
-  // ---- Positions (for count) ----
-  try {
-    const r = await fetch('/health/positions?_=' + Date.now());
-    const d = await r.json();
-    if (!d.error) {
-      document.getElementById('stat_poscount').textContent = d.count + ' / ' + (window.maxPositions || 5);
-      document.getElementById('hint_pos').textContent = d.count + ' / ' + (window.maxPositions || 5) + ' 个';
-    }
-  } catch(e) {}
+  // Positions count
+  try{
+    const r=await fetch('/health/positions?_='+Date.now());const d=await r.json();
+    if(!d.error)document.getElementById('stat_poscount').textContent=d.count+' / '+(window.maxPositions||5);
+  }catch(e){}
 
-  // ---- System & Risk ----
-  let wsOk = false, dailyPnl = 0, poolSize = 0;
-  try {
-    const [hR, cbR, acctR, pnlR, ordR, candR] = await Promise.all([
-      fetch('/health'),
-      fetch('/health/circuit'),
-      fetch('/health/account'),
-      fetch('/health/pnl'),
-      fetch('/health/orders?_=' + Date.now()),
-      fetch('/health/candidates'),
+  // System + Strategy
+  try{
+    const[hR,cbR,acctR,pnlR,ordR,candR,stratR]=await Promise.all([
+      fetch('/health'),fetch('/health/circuit'),fetch('/health/account'),
+      fetch('/health/pnl'),fetch('/health/orders?_='+Date.now()),
+      fetch('/health/candidates'),fetch('/health/strategy')
     ]);
-    const hD = await hR.json();
-    const cbD = await cbR.json();
-    const acctD = await acctR.json();
-    const pnlD = await pnlR.json();
-    const ordD = await ordR.json();
-    const candD = await candR.json();
+    const hD=await hR.json(),cbD=await cbR.json(),acctD=await acctR.json();
+    const pnlD=await pnlR.json(),ordD=await ordR.json();
+    const candD=await candR.json(),stratD=await stratR.json();
 
-    wsOk = hD.websocket_connected;
-    dailyPnl = pnlD.net_pnl_1d || 0;
+    document.getElementById('sys_ws').innerHTML=hD.websocket_connected
+      ?'<span class="conn-dot ok pulse"></span>WebSocket'
+      :'<span class="conn-dot err"></span>断开';
+    document.getElementById('hint_sys').textContent='v'+hD.version;
 
-    // 行情源
-    document.getElementById('sys_ws').innerHTML = wsOk
-      ? '<span class="conn-dot ok pulse"></span>WebSocket 已连接'
-      : '<span class="conn-dot err"></span>WebSocket 断开';
-    document.getElementById('hint_sys').textContent = 'v' + hD.version;
+    // Strategy
+    if(!stratD.error){
+      document.getElementById('sys_preset').innerHTML='<span class="badge badge-purple">'+esc(stratD.preset||'composite')+'</span>';
+      document.getElementById('sys_threshold').innerHTML='买入≥'+stratD.buy_threshold+' 卖出≤'+stratD.sell_threshold;
+    }
 
-    // 熔断 + 当日盈亏
-    const tripped = cbD.tripped;
-    document.getElementById('sys_cb').innerHTML = tripped
-      ? '<span class="badge badge-err">已熔断</span>'
-      : '<span class="badge badge-ok">正常</span>';
-    document.getElementById('sys_daily_pnl').innerHTML = '<span class="' + cn(dailyPnl) + '">' + fmtUSD(dailyPnl) + '</span>';
+    const tripped=cbD.tripped;
+    document.getElementById('sys_cb').innerHTML=tripped?'<span class="badge badge-err">已熔断</span>':'<span class="badge badge-ok">正常</span>';
+    document.getElementById('sys_daily_pnl').innerHTML='<span class="'+cn(pnlD.net_pnl_1d||0)+'">'+fmtUSD(pnlD.net_pnl_1d||0)+'</span>';
+    document.getElementById('stat_cb').textContent=tripped?'已熔断':'正常';
+    document.getElementById('stat_cb').style.color=tripped?'#f85149':'#3fb950';
 
-    // 风控状态卡片
-    const cbEl = document.getElementById('stat_cb');
-    cbEl.textContent = tripped ? '已熔断' : '正常';
-    cbEl.style.color = tripped ? '#f87171' : '#4ade80';
+    // Pool
+    document.getElementById('sys_pool').textContent=(candD&&candD.total||0)+' 个候选';
 
-    // 保证金率 (从 account API)
-    const mrPct = (acctD.margin_ratio || 0) * 100;
-    document.getElementById('sys_margin_ratio').innerHTML = '<span style="color:' + (mrPct > 80 ? '#f87171' : mrPct > 50 ? '#fbbf24' : '#4ade80') + '">' + mrPct.toFixed(2) + '%</span>';
-    document.getElementById('stat_margin').querySelector('.value').textContent = mrPct.toFixed(2) + '%';
-    document.getElementById('stat_margin').querySelector('.value').style.color = mrPct > 80 ? '#f87171' : mrPct > 50 ? '#fbbf24' : '#4ade80';
+    // Protection orders
+    let slCount=0,tpCount=0,totalOrders=0;
+    if(!ordD.error&&ordD.by_symbol){
+      ordD.by_symbol.forEach(s=>{slCount+=s.stop_orders;tpCount+=s.tp_orders;totalOrders+=s.total});
+    }
+    document.getElementById('sys_orders').innerHTML=(slCount>0||tpCount>0)
+      ?'<span class="badge badge-ok">SL:'+slCount+' TP:'+tpCount+'</span> 共'+totalOrders+'单'
+      :'<span class="badge badge-warn">无保护单</span>';
+    window._ordBySymbol=ordD.by_symbol||[];
 
-    // 保证金监控
-    try {
-      const mgR = await fetch('/health/margin');
-      const mgD = await mgR.json();
-      if (!mgD.error) {
-        const warnPct = (mgD.warning_threshold * 100).toFixed(0);
-        const critPct = (mgD.critical_threshold * 100).toFixed(0);
-        document.getElementById('sys_margin_mon').innerHTML = mgD.running
-          ? '<span class="badge badge-ok">运行中</span> ' + warnPct + '%/' + critPct + '%'
-          : '<span class="badge badge-err">未启动</span>';
+    // Margin monitor
+    try{
+      const mgR=await fetch('/health/margin');const mgD=await mgR.json();
+      if(!mgD.error){
+        document.getElementById('sys_margin_mon').innerHTML=mgD.running
+          ?'<span class="badge badge-ok">运行</span> '+(mgD.warning_threshold*100).toFixed(0)+'%/'+(mgD.critical_threshold*100).toFixed(0)+'%'
+          :'<span class="badge badge-err">未启动</span>';
       }
-    } catch(e) {}
+    }catch(e){}
 
-    // 候选池
-    poolSize = (candD && candD.total) ? candD.total : 0;
-    document.getElementById('sys_pool').textContent = poolSize + ' 个候选 / 扫描中';
+    // Perf
+    const net7=pnlD.net_pnl_7d||0,net30=pnlD.net_pnl_30d||0;
+    const netTotal=pnlD.net_pnl_total||0,net1d=pnlD.net_pnl_1d||0;
+    document.getElementById('report').innerHTML=
+      '<div class="inline-stat"><span>7天净盈亏</span><span class="'+cn(net7)+' value-big">'+fmtUSD(net7)+'</span></div>'+
+      '<div class="inline-stat"><span>30天净盈亏</span><span class="'+cn(net30)+' value-big">'+fmtUSD(net30)+'</span></div>'+
+      '<div class="inline-stat"><span>累计净盈亏</span><span class="'+cn(netTotal)+' value-big">'+fmtUSD(netTotal)+'</span></div>'+
+      '<div class="inline-stat"><span>今日净盈亏</span><span class="'+cn(net1d)+' value-big">'+fmtUSD(net1d)+'</span></div>'+
+      '<div class="inline-stat"><span>手续费</span><span>'+fmtUSD(pnlD.commission_7d||0)+'</span></div>'+
+      '<div class="inline-stat"><span>资金费率</span><span>'+fmtUSD(pnlD.funding_7d||0)+'</span></div>'+
+      '<div class="inline-stat"><span>交易币种</span><span>'+(pnlD.symbols_traded||0)+'</span></div>';
+    document.getElementById('hint_perf').textContent='含手续费+资金费率';
+  }catch(e){document.getElementById('sys_ws').innerHTML='<span class="conn-dot err"></span>连接失败'}
 
-    // 挂单 (保护单统计)
-    let slCount = 0, tpCount = 0, totalOrders = 0;
-    if (!ordD.error && ordD.by_symbol) {
-      ordD.by_symbol.forEach(s => { slCount += s.stop_orders; tpCount += s.tp_orders; totalOrders += s.total; });
-    }
-    document.getElementById('sys_orders').innerHTML = (slCount > 0 || tpCount > 0)
-      ? '<span class="badge badge-ok">SL:' + slCount + ' TP:' + tpCount + '</span> 共' + totalOrders + '单'
-      : '<span class="badge badge-warn">无保护单</span> 共' + totalOrders + '单';
-    window._ordBySymbol = ordD.by_symbol || [];
-  } catch(e) {
-    document.getElementById('sys_ws').innerHTML = '<span class="conn-dot err"></span>无法连接';
-  }
-
-  // ---- Protection orders map (for position table) ----
-  let protBySymbol = {};
-  (window._ordBySymbol || []).forEach(s => {
-    protBySymbol[s.symbol] = { sl: s.stop_orders, tp: s.tp_orders, total: s.total };
-  });
-
-  // ---- Positions detail ----
-  try {
-    const r = await fetch('/health/positions?_=' + Date.now());
-    const d = await r.json();
-    if (!d.error && d.positions && d.positions.length > 0) {
-      let html = '<div class="scroll-table"><table><tr><th>币种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th><th>ROI</th><th>保护单</th></tr>';
-      d.positions.forEach(p => {
-        const pnl = parseFloat(p.unrealized_pnl || 0);
-        const roi = parseFloat(p.roi_pct || 0);
-        const side = (p.side || '').toUpperCase();
-        const prot = protBySymbol[p.symbol] || { sl: 0, tp: 0 };
-        const protHtml = (prot.sl > 0 || prot.tp > 0)
-          ? '<span class="badge badge-ok">SL:' + prot.sl + ' TP:' + prot.tp + '</span>'
-          : '<span class="badge badge-err" style="animation:pulse 1s infinite">裸仓!</span>';
-        html += '<tr>' +
-          '<td><strong>' + esc(p.symbol) + '</strong></td>' +
-          '<td><span class="badge ' + (side === 'LONG' ? 'badge-long' : 'badge-short') + '">' + side + '</span></td>' +
-          '<td>' + fmtNum(p.qty, 3) + '</td>' +
-          '<td>' + fmtNum(p.entry_price, 5) + '</td>' +
-          '<td>' + fmtNum(p.mark_price, 5) + '</td>' +
-          '<td class="' + cn(pnl) + '">' + fmtUSD(pnl) + '</td>' +
-          '<td class="' + cn(roi) + '">' + fmtPct(roi) + '</td>' +
-          '<td>' + protHtml + '</td>' +
-          '</tr>';
+  // Positions detail
+  let protBySymbol={};
+  (window._ordBySymbol||[]).forEach(s=>{protBySymbol[s.symbol]={sl:s.stop_orders,tp:s.tp_orders,total:s.total}});
+  try{
+    const r=await fetch('/health/positions?_='+Date.now());const d=await r.json();
+    if(!d.error&&d.positions&&d.positions.length>0){
+      let html='<div class="scroll-table"><table><tr><th>币种</th><th>方向</th><th>数量</th><th>杠杆</th><th>模式</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th><th>ROI</th><th>强平价</th><th>保护单</th></tr>';
+      d.positions.forEach(p=>{
+        const pnl=parseFloat(p.unrealized_pnl||0);
+        const roi=parseFloat(p.roi_pct||0);
+        const side=(p.side||'').toUpperCase();
+        const lev=p.leverage||1;
+        const mtype=p.margin_type||'cross';
+        const liq=p.liquidation_price||0;
+        const prot=protBySymbol[p.symbol]||{sl:0,tp:0};
+        const protHtml=(prot.sl>0||prot.tp>0)
+          ?'<span class="badge badge-ok">SL:'+prot.sl+' TP:'+prot.tp+'</span>'
+          :'<span class="badge badge-err" style="animation:pulse 1s infinite">裸仓!</span>';
+        html+='<tr>'+
+          '<td><strong>'+esc(p.symbol)+'</strong></td>'+
+          '<td><span class="badge '+(side==='LONG'?'badge-long':'badge-short')+'">'+side+'</span></td>'+
+          '<td>'+fmtNum(p.qty,3)+'</td>'+
+          '<td>'+lev+'x</td>'+
+          '<td>'+marginLabel(mtype)+'</td>'+
+          '<td>'+fmtNum(p.entry_price,5)+'</td>'+
+          '<td>'+fmtNum(p.mark_price,5)+'</td>'+
+          '<td class="'+cn(pnl)+'">'+fmtUSD(pnl)+'</td>'+
+          '<td class="'+cn(roi)+'">'+fmtPct(roi)+'</td>'+
+          '<td style="color:#f85149">'+(liq>0?fmtNum(liq,5):'--')+'</td>'+
+          '<td>'+protHtml+'</td></tr>';
       });
-      html += '</table></div>';
-      document.getElementById('positions').innerHTML = html;
-    } else {
-      document.getElementById('positions').innerHTML = '<p style="text-align:center;padding:20px;color:#64748b;">暂无持仓</p>';
+      html+='</table></div>';
+      document.getElementById('positions').innerHTML=html;
+      document.getElementById('hint_pos').textContent=d.count+' / '+(window.maxPositions||5)+' 个';
     }
-  } catch(e) {
-    document.getElementById('positions').innerHTML = '<p class="error">持仓数据加载失败</p>';
-  }
+  }catch(e){}
 
-  // ---- Binance 权威盈亏 ----
-  try {
-    const r = await fetch('/health/pnl');
-    const d = await r.json();
-    if (!d.error) {
-      // net_pnl = realized_pnl + commission + funding (与 Binance 交易所显示一致)
-      const net7 = d.net_pnl_7d || 0;
-      const net30 = d.net_pnl_30d || 0;
-      const netTotal = d.net_pnl_total || 0;
-      const net1d = d.net_pnl_1d || 0;
-      document.getElementById('report').innerHTML =
-        '<div class="inline-stat"><span>7天净盈亏</span><span class="' + cn(net7) + ' value-big">' + fmtUSD(net7) + '</span></div>' +
-        '<div class="inline-stat"><span>30天净盈亏</span><span class="' + cn(net30) + ' value-big">' + fmtUSD(net30) + '</span></div>' +
-        '<div class="inline-stat"><span>累计净盈亏</span><span class="' + cn(netTotal) + ' value-big">' + fmtUSD(netTotal) + '</span></div>' +
-        '<div class="inline-stat"><span>今日净盈亏</span><span class="' + cn(net1d) + ' value-big">' + fmtUSD(net1d) + '</span></div>' +
-        '<div class="inline-stat"><span>手续费</span><span>' + fmtUSD(d.commission_7d || 0) + '</span></div>' +
-        '<div class="inline-stat"><span>资金费率</span><span>' + fmtUSD(d.funding_7d || 0) + '</span></div>' +
-        '<div class="inline-stat"><span>交易币种</span><span>' + (d.symbols_traded || 0) + '</span></div>' +
-        '<div class="inline-stat" style="font-size:0.65rem;color:#475569;"><span>拉取记录</span><span>' + (d.total_events || 0) + ' 条</span></div>';
-      document.getElementById('hint_perf').textContent = '含手续费+资金费率';
-    }
-  } catch(e) {}
-
-  // ---- Trade History ----
-  try {
-    const r = await fetch('/health/trades');
-    const d = await r.json();
-    if (!d.error && d.trades && d.trades.length > 0) {
-      let html = '<div class="scroll-table"><table><tr><th>时间</th><th>币种</th><th>方向</th><th>价格</th><th>数量</th><th>手续费</th><th>策略</th></tr>';
-      d.trades.slice(0, 30).forEach(t => {
-        const side = (t.side || '').toUpperCase();
-        const sideCls = side === 'BUY' ? 'badge-long' : 'badge-short';
-        const tm = t.filled_at ? new Date(t.filled_at).toLocaleTimeString() : '-';
-        const strat = (t.strategy_name || t.type || '-');
-        html += '<tr>' +
-          '<td class="nowrap">' + tm + '</td>' +
-          '<td><strong>' + esc(t.symbol) + '</strong></td>' +
-          '<td><span class="badge ' + sideCls + '">' + side + '</span></td>' +
-          '<td>' + fmtNum(t.price, 5) + '</td>' +
-          '<td>' + fmtNum(t.qty, 4) + '</td>' +
-          '<td>' + fmtNum(t.commission, 6) + '</td>' +
-          '<td class="truncate" title="' + esc(strat) + '">' + (strat.length > 15 ? esc(strat.slice(0,15))+'..' : esc(strat)) + '</td>' +
-          '</tr>';
+  // Trade History
+  try{
+    const r=await fetch('/health/trades');const d=await r.json();
+    if(!d.error&&d.trades&&d.trades.length>0){
+      let html='<div class="scroll-table"><table><tr><th>时间</th><th>币种</th><th>方向</th><th>价格</th><th>数量</th><th>手续费</th><th>策略</th></tr>';
+      d.trades.slice(0,30).forEach(t=>{
+        const side=(t.side||'').toUpperCase();
+        const sideCls=side==='BUY'?'badge-long':'badge-short';
+        const tm=t.filled_at?new Date(t.filled_at).toLocaleTimeString():'-';
+        const strat=esc(t.strategy_name||t.type||'-');
+        html+='<tr><td class="nowrap">'+tm+'</td>'+
+          '<td><strong>'+esc(t.symbol)+'</strong></td>'+
+          '<td><span class="badge '+sideCls+'">'+side+'</span></td>'+
+          '<td>'+fmtNum(t.price,5)+'</td><td>'+fmtNum(t.qty,4)+'</td>'+
+          '<td>'+fmtNum(t.commission,6)+'</td>'+
+          '<td class="truncate" title="'+strat+'">'+strat+'</td></tr>';
       });
-      html += '</table></div>';
-      document.getElementById('trade_history').innerHTML = html;
-      document.getElementById('hint_trades').textContent = '共 ' + d.total + ' 笔';
+      html+='</table></div>';
+      document.getElementById('trade_history').innerHTML=html;
+      document.getElementById('hint_trades').textContent=d.total+' 笔';
     }
-  } catch(e) {}
+  }catch(e){}
 
-  // ---- Daily PnL ----
-  try {
-    const r = await fetch('/health/report/30d');
-    const d = await r.json();
-    if (!d.error && d.daily_pnl && d.daily_pnl.length > 0) {
-      const bars = d.daily_pnl;
-      const maxAbs = Math.max(...bars.map(b => Math.abs(b.pnl)), 0.01);
-      let html = '<div style="display:flex;align-items:flex-end;gap:1px;height:80px;overflow-x:auto;padding:4px 0;">';
-      bars.forEach(b => {
-        const h = Math.max(4, (Math.abs(b.pnl) / maxAbs * 70));
-        const cls = b.pnl >= 0 ? 'daily-bar-pos' : 'daily-bar-neg';
-        html += '<div title="' + esc(b.date) + ': ' + fmtUSD(b.pnl) + ' (' + b.trades + '笔)" ' +
-          'class="daily-bar ' + cls + '" style="height:' + h + 'px;flex:0 0 12px;"></div>';
+  // Scoring Detail
+  try{
+    const r=await fetch('/health/scoring-detail');const d=await r.json();
+    if(!d.error&&d.candidates&&d.candidates.length>0){
+      let html='<div class="scroll-table"><table><tr><th>币种</th><th>价格</th><th>涨跌</th><th>扫描分</th><th>综合评分</th><th>方向</th><th>置信度</th></tr>';
+      d.candidates.forEach(c=>{
+        const changeCls=parseFloat(c.change_24h)>=0?'pnl-pos':'pnl-neg';
+        let dirBadge='<span class="badge badge-hold">HOLD</span>';
+        if(c.direction==='LONG')dirBadge='<span class="badge badge-long">LONG</span>';
+        else if(c.direction==='SHORT')dirBadge='<span class="badge badge-short">SHORT</span>';
+        const totalScore=c.total_score||c.score||0;
+        html+='<tr><td><strong style="color:#58a6ff">'+esc(c.symbol)+'</strong></td>'+
+          '<td>'+fmtNum(c.price,4)+'</td>'+
+          '<td class="'+changeCls+'">'+fmtPct(c.change_24h)+'</td>'+
+          '<td><span class="badge badge-teal">'+c.scanner_score+'</span></td>'+
+          '<td><span class="badge badge-purple">'+Math.round(totalScore)+'</span></td>'+
+          '<td>'+dirBadge+'</td>'+
+          '<td>'+fmtPct(c.confidence||0)+'</td></tr>';
       });
-      html += '</div><div style="font-size:0.65rem;color:#475569;margin-top:4px;text-align:center;">每日盈亏柱状图 (最近30天)</div>';
-      document.getElementById('daily_pnl').innerHTML = html;
+      html+='</table></div>';
+      document.getElementById('scoring_detail').innerHTML=html;
     }
-  } catch(e) {}
+  }catch(e){}
 
-  // ---- Scoring Detail ----
-  try {
-    const r = await fetch('/health/scoring-detail');
-    const d = await r.json();
-    if (!d.error && d.candidates && d.candidates.length > 0) {
-      let html = '<div class="scroll-table"><table><tr><th>币种</th><th>价格</th><th>涨跌</th><th>扫描分</th><th>因子投票 (绿=多 红=空 灰=中性)</th></tr>';
-      d.candidates.forEach(c => {
-        const changeCls = parseFloat(c.change_24h) >= 0 ? 'pnl-pos' : 'pnl-neg';
-        let factorsHtml = '<div class="factor-bar">';
-        if (c.factors && c.factors.length > 0) {
-          c.factors.forEach(f => {
-            let dotCls = 'factor-dot-neutral';
-            if (f.direction === 'LONG') dotCls = 'factor-dot-long';
-            else if (f.direction === 'SHORT') dotCls = 'factor-dot-short';
-            factorsHtml += '<span class="factor-dot ' + dotCls + '" title="' + esc(f.name) + ': ' + esc(f.direction) + ' [' + f.score + ']"></span>';
-          });
-        }
-        factorsHtml += '</div>';
-        html += '<tr>' +
-          '<td><strong style="color:#38bdf8">' + esc(c.symbol) + '</strong></td>' +
-          '<td>' + fmtNum(c.price, 4) + '</td>' +
-          '<td class="' + changeCls + '">' + fmtPct(c.change_24h) + '</td>' +
-          '<td><span class="badge badge-purple">' + c.scanner_score + '</span></td>' +
-          '<td>' + factorsHtml + '</td>' +
-          '</tr>';
+  // Signal Log
+  try{
+    const r=await fetch('/health/signals');const d=await r.json();
+    if(!d.error&&d.signals&&d.signals.length>0){
+      let html='<div class="scroll-table"><table><tr><th>时间</th><th>币种</th><th>动作</th><th>评分</th><th>说明</th></tr>';
+      d.signals.slice().reverse().slice(0,25).forEach(s=>{
+        const act=s.action||'';let actCls='badge-hold';
+        if(act.includes('LONG'))actCls='badge-long';
+        else if(act.includes('SHORT'))actCls='badge-short';
+        const tm=s.time?new Date(s.time).toLocaleTimeString():'-';
+        html+='<tr><td class="nowrap">'+tm+'</td>'+
+          '<td><strong>'+esc(s.symbol)+'</strong></td>'+
+          '<td><span class="badge '+actCls+'">'+esc(act)+'</span></td>'+
+          '<td>'+(s.score||'-')+'</td>'+
+          '<td class="truncate" title="'+esc(s.detail||'')+'">'+esc(s.detail||'-')+'</td></tr>';
       });
-      html += '</table></div>';
-      document.getElementById('scoring_detail').innerHTML = html;
-    } else {
-      document.getElementById('scoring_detail').innerHTML = '<p style="text-align:center;padding:20px;color:#64748b;">暂无候选 — 等待扫描器产出</p>';
+      html+='</table></div>';
+      document.getElementById('signal_log').innerHTML=html;
+      document.getElementById('hint_sig').textContent=d.total+' 条';
     }
-  } catch(e) {
-    document.getElementById('scoring_detail').innerHTML = '<p class="error">加载失败</p>';
-  }
+  }catch(e){}
 
-  // ---- Signal Log ----
-  try {
-    const r = await fetch('/health/signals');
-    const d = await r.json();
-    if (!d.error && d.signals && d.signals.length > 0) {
-      let html = '<div class="scroll-table"><table><tr><th>时间</th><th>币种</th><th>动作</th><th>评分</th><th>说明</th></tr>';
-      const recent = d.signals.slice().reverse().slice(0, 25);
-      recent.forEach(s => {
-        const act = s.action || '';
-        let actCls = 'badge-hold';
-        if (act.includes('LONG')) actCls = 'badge-long';
-        else if (act.includes('SHORT')) actCls = 'badge-short';
-        const tm = s.time ? new Date(s.time).toLocaleTimeString() : '-';
-        html += '<tr class="signal-row ' + (act.includes('LONG') ? 'LONG' : (act.includes('SHORT') ? 'SHORT' : 'HOLD')) + '">' +
-          '<td class="nowrap">' + tm + '</td>' +
-          '<td><strong>' + esc(s.symbol) + '</strong></td>' +
-          '<td><span class="badge ' + actCls + '">' + esc(act) + '</span></td>' +
-          '<td>' + (s.score || '-') + '</td>' +
-          '<td class="truncate" title="' + esc(s.detail || '') + '">' + esc(s.detail || '-') + '</td>' +
-          '</tr>';
+  // Daily PnL
+  try{
+    const r=await fetch('/health/report/30d');const d=await r.json();
+    if(!d.error&&d.daily_pnl&&d.daily_pnl.length>0){
+      const bars=d.daily_pnl;const maxAbs=Math.max(...bars.map(b=>Math.abs(b.pnl)),0.01);
+      let html='<div style="display:flex;align-items:flex-end;gap:1px;height:80px;overflow-x:auto;padding:4px 0">';
+      bars.forEach(b=>{
+        const h=Math.max(4,(Math.abs(b.pnl)/maxAbs*70));
+        html+='<div title="'+esc(b.date)+': '+fmtUSD(b.pnl)+' ('+b.trades+'笔)" class="daily-bar '+(b.pnl>=0?'daily-bar-pos':'daily-bar-neg')+'" style="height:'+h+'px;flex:0 0 12px"></div>';
       });
-      html += '</table></div>';
-      document.getElementById('signal_log').innerHTML = html;
-      document.getElementById('hint_sig').textContent = '共 ' + d.total + ' 条';
-    } else {
-      document.getElementById('signal_log').innerHTML = '<p style="text-align:center;padding:20px;color:#64748b;">暂无信号 — 评分未达阈值</p>';
-      document.getElementById('hint_sig').textContent = '0 条';
+      html+='</div><div style="font-size:.62rem;color:#484f58;margin-top:4px;text-align:center">30天盈亏柱状图</div>';
+      document.getElementById('daily_pnl').innerHTML=html;
     }
-  } catch(e) {
-    document.getElementById('signal_log').innerHTML = '<p class="error">加载失败</p>';
-  }
+  }catch(e){}
 }
 
-// Countdown timer
-function tick() {
-  countdown -= 1;
-  if (countdown <= 0) countdown = REFRESH_MS / 1000;
-  const td = document.getElementById('timestamp');
-  if (td && td.textContent) {
-    td.textContent = td.textContent.replace(/\(下次刷新: \d+s\)/, '(下次刷新: ' + countdown + 's)');
-  }
-}
-setInterval(tick, 1000);
-
-load();
-setInterval(load, REFRESH_MS);
+function tick(){countdown-=1;if(countdown<=0)countdown=REFRESH_MS/1000}
+setInterval(tick,1000);
+load();setInterval(load,REFRESH_MS);
 </script>
 </body>
 </html>"""
 
 
-def add_dashboard_route(app: FastAPI) -> None:
-    """Add the dashboard route to a FastAPI app."""
+def create_dashboard_app() -> FastAPI:
+    """Create a standalone FastAPI app serving the dashboard."""
+    app = FastAPI(docs_url=None, redoc_url=None)
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard():
         return DASHBOARD_HTML
+
+    return app

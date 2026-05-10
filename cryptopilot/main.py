@@ -795,6 +795,8 @@ async def main() -> None:
         candidate_pool=candidate_pool,
         scoring_engine=scoring_engine,
         order_executor=order_executor,
+        scanner=scanner_obj,
+        preset_name=active_preset,
     )
     add_dashboard_route(health_app)
 
@@ -1243,6 +1245,7 @@ async def _execute_signal(
             top_factors=factor_labels,
             sl_price=0.0,  # 后面填
             tp_tiers=[],   # 后面填
+            margin_type="ISOLATED",
         )
 
         # 记录开仓时间 (用于平仓通知计算持仓时长)

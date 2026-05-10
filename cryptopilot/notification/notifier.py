@@ -47,6 +47,8 @@ class EventData:
     symbol: str = ""
     strategy_id: str = ""
 
+    margin_type: str = "ISOLATED"     # 保证金模式: ISOLATED(逐仓) / CROSSED(全仓)
+
     # 开仓
     price: float = 0.0
     quantity: float = 0.0
@@ -121,10 +123,10 @@ class Notifier:
         top_factors: list[str] | None = None,
         sl_price: float = 0.0,
         tp_tiers: list[dict] | None = None,
+        margin_type: str = "ISOLATED",
     ) -> None:
         """开仓通知 — V2 多因子评分+保护单."""
         direction = "📈 做多" if side == "LONG" else "📉 做空"
-        factors_str = " · ".join(top_factors or [])
         self.notify(EventData(
             event=Events.POSITION_OPENED,
             message=f"{direction} {symbol} @{price:.4f}",
@@ -136,6 +138,7 @@ class Notifier:
             top_factors=top_factors or [],
             sl_price=sl_price,
             tp_tiers=tp_tiers or [],
+            margin_type=margin_type,
         ))
 
     def position_closed(

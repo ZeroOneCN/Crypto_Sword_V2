@@ -149,6 +149,8 @@ def create_health_app(
     candidate_pool=None,
     scoring_engine=None,
     order_executor=None,
+    scanner=None,
+    preset_name: str = "composite",
 ) -> FastAPI:
     """Build the FastAPI app with injected dependencies."""
 
@@ -182,6 +184,29 @@ def create_health_app(
             "strategies": strategy_engine.get_status(),
         }
 
+    @app.get("/health/strategy")
+    async def health_strategy():
+        """Return current strategy preset, scoring thresholds, and factor weights."""
+        result = {
+            "preset": preset_name,
+            "buy_threshold": None,
+            "sell_threshold": None,
+            "factor_weights": [],
+            "max_symbols_to_scan": 0,
+        }
+        if scoring_engine is not None:
+            result["buy_threshold"] = getattr(scoring_engine, "_buy_threshold", None)
+            result["sell_threshold"] = getattr(scoring_engine, "_sell_threshold", None)
+            factors = getattr(scoring_engine, "_factors", [])
+            result["factor_weights"] = [
+                {"name": f.name, "weight": round(f.weight, 3)}
+                for f in factors
+            ]
+        if scanner is not None:
+            result["max_symbols_to_scan"] = getattr(scanner, "_max_scan", 0)
+            result["scanner_running"] = getattr(scanner, "_running", False)
+        return result
+
     @app.get("/health/positions")
     async def health_positions():
         """Return current open positions with enhanced data."""
@@ -189,18 +214,24 @@ def create_health_app(
             return {"error": "Position manager not available"}
         positions = position_manager.get_all_positions()
 
-        # 增强: 获取实时标记价和计算 ROI
+        # 增强: 获取实时标记价、杠杆、保证金类型、强平价、名义价值
         try:
             if order_executor:
                 exchange_positions = await order_executor.get_position_info()
                 # 用交易所最新数据增强
                 for pos in positions:
                     sym = pos.get("symbol", "")
+                    # 确保默认值
+                    pos.setdefault("leverage", 1)
+                    pos.setdefault("margin_type", "cross")
+                    pos.setdefault("liquidation_price", 0.0)
+                    pos.setdefault("notional", 0.0)
                     for ep in exchange_positions:
                         if ep.symbol == sym:
                             pos["mark_price"] = ep.mark_price
                             pos["unrealized_pnl"] = round(ep.unrealized_pnl, 4)
                             pos["leverage"] = ep.leverage
+                            pos["margin_type"] = ep.margin_type or "cross"
                             pos["liquidation_price"] = ep.liquidation_price
                             # 计算 ROI%
                             if ep.entry_price > 0:
@@ -413,6 +444,9 @@ def create_health_app(
                 "available_balance": round(acct.available_balance, 2),
                 "unrealized_pnl": round(acct.unrealized_pnl, 2),
                 "margin_ratio": round(acct.margin_ratio, 4),
+                "margin_type": acct.margin_type or (
+                    "cross"  # Binance 默认全仓
+                ),
                 "timestamp": datetime.now(tz=timezone.utc).isoformat(),
             }
         except Exception as exc:
@@ -484,7 +518,7 @@ def create_health_app(
             return {"error": "候选池不可用"}
         candidates = await candidate_pool.get_all()
         if not candidates:
-            return {"candidates": []}
+            return {"candidates": [], "preset": preset_name}
 
         result = []
         for cand in sorted(candidates, key=lambda c: c.scanner_score, reverse=True)[:5]:
@@ -511,7 +545,7 @@ def create_health_app(
                 "scanner_score": round(cand.scanner_score, 1),
                 "factors": factors_info,
             })
-        return {"candidates": result}
+        return {"candidates": result, "preset": preset_name}
 
     @app.exception_handler(Exception)
     async def generic_handler(request, exc):

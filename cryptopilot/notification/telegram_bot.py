@@ -208,7 +208,7 @@ class TelegramBot:
         # 标题行
         parts.append(f"{emoji} **CryptoPilot · 开仓**")
         parts.append(f"")
-        parts.append(f"**{data.symbol}** · {self._side_label(data)} · {data.leverage}x")
+        parts.append(f"**{data.symbol}** · {self._side_label(data)} · {data.leverage}x · {self._margin_label(data.margin_type)}")
         parts.append(f"")
         
         # 成交信息
@@ -289,10 +289,13 @@ class TelegramBot:
 
     def _side_label(self, data: EventData) -> str:
         """从 extra 推断方向."""
-        # 尝试从 extra 中读取 side
         if data.extra and "side" in data.extra:
             return "📈 做多" if data.extra["side"] == "LONG" else "📉 做空"
         return ""
+
+    def _margin_label(self, margin_type: str) -> str:
+        """保证金模式标签."""
+        return "🔒 逐仓" if margin_type == "ISOLATED" else "🌐 全仓"
 
     def _exit_reason_label(self, reason: str) -> str:
         labels = {
