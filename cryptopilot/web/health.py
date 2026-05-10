@@ -1,0 +1,185 @@
+"""FastAPI health check, monitoring, and report endpoints."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
+
+def create_health_app(
+    strategy_engine=None,
+    position_manager=None,
+    websocket_manager=None,
+    circuit_breaker=None,
+    notifier=None,
+    db=None,
+    report_generator=None,
+    margin_monitor=None,
+    candidate_pool=None,
+) -> FastAPI:
+    """Build the FastAPI app with injected dependencies."""
+
+    app = FastAPI(title="CryptoPilot Health", version="0.1.0", docs_url=None, redoc_url=None)
+
+    @app.get("/health")
+    async def health():
+        """Main health check — returns overall system status."""
+        ws_connected = websocket_manager.is_connected if websocket_manager else False
+        cb_tripped = circuit_breaker.tripped if circuit_breaker else False
+
+        ok = ws_connected and not cb_tripped
+        status = "ok" if ok else "degraded"
+
+        return {
+            "status": status,
+            "version": "0.1.0",
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "websocket_connected": ws_connected,
+            "circuit_breaker_tripped": cb_tripped,
+        }
+
+    @app.get("/health/strategies")
+    async def health_strategies():
+        """Return per-strategy status."""
+        if strategy_engine is None:
+            return {"error": "Strategy engine not available"}
+        return {
+            "total": strategy_engine.total_count,
+            "active": strategy_engine.active_count,
+            "strategies": strategy_engine.get_status(),
+        }
+
+    @app.get("/health/positions")
+    async def health_positions():
+        """Return current open positions."""
+        if position_manager is None:
+            return {"error": "Position manager not available"}
+        return {
+            "count": position_manager.position_count,
+            "positions": position_manager.get_all_positions(),
+        }
+
+    @app.get("/health/circuit")
+    async def health_circuit():
+        """Return circuit breaker state."""
+        if circuit_breaker is None:
+            return {"error": "Circuit breaker not available"}
+        return {
+            "tripped": circuit_breaker.tripped,
+            "daily_pnl": circuit_breaker.daily_pnl,
+        }
+
+    @app.get("/health/margin")
+    async def health_margin():
+        """Return margin monitoring status."""
+        if margin_monitor is None:
+            return {"error": "Margin monitor not available"}
+        return {
+            "running": margin_monitor._running,
+            "warning_threshold": margin_monitor._warning,
+            "critical_threshold": margin_monitor._critical,
+        }
+
+    @app.get("/health/report")
+    async def health_report():
+        """Return full trading performance report."""
+        if report_generator is None:
+            return {"error": "Report generator not available"}
+        report = await report_generator.generate()
+        return {
+            "total_trades": report.total_trades,
+            "winning_trades": report.winning_trades,
+            "losing_trades": report.losing_trades,
+            "win_rate": round(report.win_rate, 1),
+            "total_pnl": round(report.total_pnl, 2),
+            "total_pnl_pct": round(report.total_pnl_pct, 2),
+            "avg_win": round(report.avg_win, 2),
+            "avg_loss": round(report.avg_loss, 2),
+            "profit_factor": round(report.profit_factor, 2) if report.profit_factor != float("inf") else None,
+            "max_drawdown_pct": round(report.max_drawdown_pct, 1),
+            "sharpe_ratio": round(report.sharpe_ratio, 2),
+            "start_balance": round(report.start_balance, 2),
+            "current_balance": round(report.current_balance, 2),
+            "trades": [
+                {
+                    "symbol": t.symbol,
+                    "entry_price": round(t.entry_price, 4),
+                    "exit_price": round(t.exit_price, 4),
+                    "pnl": round(t.pnl, 2),
+                    "pnl_pct": round(t.pnl_pct, 2),
+                    "opened_at": t.opened_at,
+                }
+                for t in report.trades[-20:]  # Last 20 trades
+            ],
+            "generated_at": report.generated_at,
+        }
+
+    @app.get("/health/report/summary")
+    async def health_report_summary():
+        """Return lightweight performance summary."""
+        if report_generator is None:
+            return {"error": "Report generator not available"}
+        return await report_generator.generate_summary()
+
+    @app.get("/health/candidates")
+    async def health_candidates():
+        """候选池快照."""
+        if candidate_pool is None:
+            return {"error": "候选池不可用"}
+        candidates = await candidate_pool.get_all()
+        return {
+            "total": len(candidates),
+            "candidates": [
+                {
+                    "symbol": c.symbol,
+                    "price": round(c.current_price, 4),
+                    "change_24h": round(c.change_24h_pct, 2),
+                    "volume_ratio": round(c.volume_ratio, 1),
+                    "oi_change": round(c.oi_change_pct, 1),
+                    "funding_rate": f"{c.funding_rate*100:.4f}%",
+                    "score": round(c.scanner_score, 1),
+                    "reasons": c.scrape_reasons,
+                }
+                for c in candidates
+            ],
+        }
+
+    @app.get("/health/scoring/{symbol}")
+    async def health_scoring(symbol: str):
+        """对指定币种实时评分."""
+        if candidate_pool is None:
+            return {"error": "候选池不可用"}
+        # 从候选池中获取该币种
+        candidates = await candidate_pool.get_all()
+        target = None
+        for c in candidates:
+            if c.symbol.upper() == symbol.upper():
+                target = c
+                break
+        if target is None:
+            return {"error": f"候选池中未找到 {symbol}"}
+
+        # 这里需要 scoring_engine, 但目前未暴露到 health app
+        # 返回候选的基本数据供前端展示
+        return {
+            "symbol": symbol.upper(),
+            "price": round(target.current_price, 4),
+            "change_24h": round(target.change_24h_pct, 2),
+            "volume_ratio": round(target.volume_ratio, 1),
+            "oi_change": round(target.oi_change_pct, 1),
+            "funding_rate": f"{target.funding_rate*100:.4f}%",
+            "mark_price": round(target.mark_price, 4),
+            "scanner_score": round(target.scanner_score, 1),
+            "reasons": target.scrape_reasons,
+        }
+
+    @app.exception_handler(Exception)
+    async def generic_handler(request, exc):
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(exc)},
+        )
+
+    return app

@@ -1,0 +1,108 @@
+# ============================================================
+# CryptoPilot Configuration
+# ============================================================
+
+exchange:
+  testnet: false              # true = Binance testnet, false = live trading
+  trading_type: futures      # futures or spot
+
+# ---- 代理配置 (本地开发用, 海外服务器留空) ----
+proxy:
+  enabled: false              # 国内开发设为 true, 海外服务器设为 false
+  http: http://127.0.0.1:10090
+  https: http://127.0.0.1:10090
+
+websocket:
+  streams:                   # Stream types to subscribe
+    - kline_1m
+    - ticker
+  reconnect_max_attempts: 100
+  reconnect_base_delay: 1    # seconds, doubles each attempt up to 60s cap
+
+risk:
+  max_daily_loss_pct: 2.0    # Stop all trading if daily PnL drops below -2%
+  max_positions: 5           # Maximum concurrent positions across all strategies
+  max_position_pct: 20       # Max single position size as % of account
+  max_leverage: 10           # Hard cap on leverage
+  default_leverage: 3        # Default leverage per strategy
+
+order:
+  default_type: market       # market or limit
+  cancel_pending_on_stop: true # Cancel all open orders when strategy stops
+  rate_limit_weight_per_minute: 1200
+
+notification:
+  telegram_enabled: false    # Enable Telegram bot (requires .env config)
+
+logging:
+  level: INFO                # DEBUG, INFO, WARNING, ERROR
+  retention_days: 30         # Keep log files for N days
+
+web:
+  host: 127.0.0.1
+  port: 1688
+
+# ============================================================
+# 多因子评分引擎 (connectfarm1 积累雷达集成)
+# ============================================================
+# 扫描器对所有币种初筛 → 候选池 Top-K → 10因子并行评估 → 加权汇总
+# 三套预设: 追多(chase) / 综合(composite) / 埋伏(ambush)
+scoring:
+  # 当前启用的预设 (chase / composite / ambush)
+  active_preset: composite
+  buy_threshold: 50
+  sell_threshold: -50
+  min_confidence: 0.5
+
+  presets:
+    # ---- 🔥 追多 (Chase Long): 纯费率排名, 短线轧空 ----
+    chase:
+      buy_threshold: 40
+      sell_threshold: -40
+      factors:
+        - { name: funding, weight: 0.60 }           # 费率最核心
+        - { name: volume, weight: 0.20 }             # 量能确认
+        - { name: oi, weight: 0.10 }
+        - { name: anomaly, weight: 0.10 }
+
+    # ---- 📊 综合 (Composite): 四维均衡评分 ----
+    composite:
+      buy_threshold: 50
+      sell_threshold: -50
+      factors:
+        - { name: funding, weight: 0.12 }           # 🧊 费率
+        - { name: market_cap, weight: 0.12 }         # 💎 市值
+        - { name: sideways, weight: 0.15 }           # 💤 横盘天数
+        - { name: oi, weight: 0.14 }                 # ⚡ OI变化
+        - { name: atr, weight: 0.10 }                # 📏 ATR波动
+        - { name: volume, weight: 0.08 }
+        - { name: ma, weight: 0.07, params: { fast: 7, slow: 25, interval: "1m" } }
+        - { name: sentiment, weight: 0.05 }
+        - { name: anomaly, weight: 0.07 }
+
+    # ---- 🎯 埋伏 (Ambush): 市值优先, 中长线布局 ----
+    ambush:
+      buy_threshold: 45
+      sell_threshold: -45
+      factors:
+        - { name: market_cap, weight: 0.35 }         # 💎 市值最重要 (<$50M满分)
+        - { name: sideways, weight: 0.25 }           # 💤 横盘收筹 (>120天满分)
+        - { name: oi, weight: 0.20 }                 # ⚡ OI暗流检测
+        - { name: funding, weight: 0.10 }
+        - { name: volume, weight: 0.10 }
+
+  # 三级分批止盈参数 (crypto_sword 分级止盈)
+  tp_tiers:
+    tp1_pct: 3.0    # 30%仓位在此止盈
+    tp2_pct: 6.0    # 30%仓位在此止盈
+    tp3_pct: 10.0   # 40%仓位在此止盈
+
+  # 特殊信号推送 (独立于评分, 直接告警)
+  special_signals:
+    dark_flow: true           # ⚡ OI涨+价不动 → 暗流涌动
+    funding_deterioration: true  # 🔥 费率加速恶化
+    double_rank: true         # ⭐ 多策略同时上榜
+    accumulation_alert: true # 📦 横盘>90天+OI异动
+
+# ---- 兼容: 传统单币种策略 (可选) ----
+strategies: []

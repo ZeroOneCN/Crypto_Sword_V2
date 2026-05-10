@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3.10 --version)",
+      "Bash(pip --version)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\); print\\(sys.version\\)\")",
+      "Bash(pip list *)",
+      "Bash(python *)",
+      "Bash(pip install *)",
+      "Bash(ls -la /claude_code_conversations/)",
+      "Read(//c/Users/Administrator/.claude/**)",
+      "WebFetch(domain:connectfarm1.com)",
+      "WebSearch",
+      "Bash(curl -sL \"https://api.github.com/repos/connectfarm1/accumulation-radar\")",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -sL \"https://api.github.com/repos/connectfarm1/accumulation-radar/contents\")",
+      "Bash(tee /tmp/cp_startup.log)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}

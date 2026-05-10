@@ -1,0 +1,29 @@
+# Secrets
+.env
+data/keys.enc
+
+# Database
+data/*.db
+data/*.db-journal
+data/*.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Logs
+data/logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini

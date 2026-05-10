@@ -1,0 +1,31 @@
+# Core
+pydantic>=2.0
+pydantic-settings>=2.0
+PyYAML>=6.0
+python-dotenv>=1.0
+
+# Async WebSocket
+websockets>=12.0
+
+# HTTP (async REST)
+httpx>=0.25
+
+# Encryption
+cryptography>=41.0
+
+# Database
+aiosqlite>=0.19
+
+# Logging
+loguru>=0.7
+
+# Web health check
+fastapi>=0.104
+uvicorn>=0.24
+
+# Notifications
+python-telegram-bot>=20.6
+
+# Data processing
+numpy>=1.24
+pandas>=2.0

@@ -1,0 +1,389 @@
+"""StrategyEngine — registers, dispatches, and manages strategy lifecycle."""
+
+from __future__ import annotations
+
+import asyncio
+from loguru import logger
+
+from cryptopilot.market.types import KlineData, TickerData
+from cryptopilot.strategy.base import StrategyBase, Signal
+
+
+class StrategyEngine:
+    """Manages all strategy instances. Dispatches market data to matching strategies.
+
+    Supports:
+    - Register/unregister strategies
+    - Dispatch ticker/klines to matching strategies (by symbol)
+    - Isolated crash handling (one strategy failure doesn't affect others)
+    - Pause/resume/stop per strategy
+    """
+
+    def __init__(
+        self,
+        signal_queue: asyncio.Queue,
+        cache,  # MarketDataCache
+        position_manager,
+        order_manager,
+    ) -> None:
+        self._signal_queue = signal_queue
+        self._cache = cache
+        self._position_manager = position_manager
+        self._order_manager = order_manager
+
+        self._strategies: dict[str, StrategyBase] = {}
+        self._by_symbol: dict[str, list[str]] = {}
+        self._paused: set[str] = set()
+
+    # ----------------------------------------------------------------
+    # Registration
+    # ----------------------------------------------------------------
+
+    async def register(self, strategy: StrategyBase) -> str:
+        """Register a strategy, call on_init, return its ID."""
+        sid = strategy.strategy_id
+        self._strategies[sid] = strategy
+        self._by_symbol.setdefault(strategy.symbol, []).append(sid)
+
+        try:
+            await strategy.on_init()
+            logger.info(f"策略 '{sid}' 已注册并初始化（交易对={strategy.symbol}）")
+        except Exception:
+            logger.exception(f"策略 '{sid}' 初始化失败，正在移除")
+            self._strategies.pop(sid, None)
+            raise
+
+        return sid
+
+    async def unregister(self, strategy_id: str) -> None:
+        """Stop and remove a strategy."""
+        strat = self._strategies.pop(strategy_id, None)
+        if strat is None:
+            return
+        sym = strat.symbol
+        try:
+            await strat.on_stop()
+        except Exception:
+            logger.exception(f"策略 '{strategy_id}' 停止时出错")
+
+        self._by_symbol.get(sym, []).remove(strategy_id)
+        self._paused.discard(strategy_id)
+        logger.info(f"策略 '{strategy_id}' 已注销")
+
+    # ----------------------------------------------------------------
+    # Dispatch
+    # ----------------------------------------------------------------
+
+    async def dispatch_tick(self, ticker: TickerData) -> None:
+        """Route a ticker update to all strategies subscribed to its symbol."""
+        sids = self._by_symbol.get(ticker.symbol, [])
+        if not sids:
+            return
+
+        for sid in sids:
+            if sid in self._paused:
+                continue
+            strat = self._strategies.get(sid)
+            if strat is None or not strat.enabled:
+                continue
+            try:
+                await strat.on_tick(ticker)
+                signal = await strat.on_signal()
+                if signal is not None:
+                    await strat.emit_signal(signal)
+            except Exception:
+                logger.exception(f"策略 '{sid}' 在行情更新或信号处理中出错")
+
+    async def dispatch_kline(self, kline: KlineData) -> None:
+        """Route a kline update to all strategies subscribed to its symbol."""
+        sids = self._by_symbol.get(kline.symbol, [])
+        if not sids:
+            return
+
+        for sid in sids:
+            if sid in self._paused:
+                continue
+            strat = self._strategies.get(sid)
+            if strat is None or not strat.enabled:
+                continue
+            try:
+                await strat.on_kline(kline)
+                signal = await strat.on_signal()
+                if signal is not None:
+                    await strat.emit_signal(signal)
+            except Exception:
+                logger.exception(f"策略 '{sid}' 在K线更新或信号处理中出错")
+
+    # ----------------------------------------------------------------
+    # Control
+    # ----------------------------------------------------------------
+
+    async def pause(self, strategy_id: str) -> None:
+        if strategy_id in self._strategies:
+            self._strategies[strategy_id].paused = True
+            self._paused.add(strategy_id)
+
+    async def resume(self, strategy_id: str) -> None:
+        if strategy_id in self._strategies:
+            self._strategies[strategy_id].paused = False
+            self._paused.discard(strategy_id)
+
+    async def pause_all(self) -> None:
+        for sid in self._strategies:
+            self._strategies[sid].paused = True
+            self._paused.add(sid)
+        logger.info("所有策略已暂停")
+
+    async def resume_all(self) -> None:
+        for sid in list(self._paused):
+            self._strategies[sid].paused = False
+        self._paused.clear()
+        logger.info("所有策略已恢复")
+
+    async def stop_all(self) -> None:
+        for sid in list(self._strategies.keys()):
+            await self.unregister(sid)
+        logger.info("所有策略已停止")
+
+    # ----------------------------------------------------------------
+    # Scanning Pipeline (Scanner → CandidatePool → Scoring)
+    # ----------------------------------------------------------------
+
+    async def start_scanning_pipeline(
+        self,
+        cache,       # MarketDataCache
+        order_executor,
+        factor_configs: list[dict] | None = None,
+        notifier=None,
+        market_cap_fetcher=None,
+        rest_data=None,       # RestDataFetcher
+        special_signals: dict | None = None,
+        scan_interval: float = 5.0,
+        top_k: int = 3,
+        max_signals_per_cycle: int = 1,
+        buy_threshold: float = 50.0,
+        sell_threshold: float = -50.0,
+        min_confidence: float = 0.5,
+    ) -> tuple:
+        """启动扫描→候选→多因子评分→信号全链路.
+
+        factor_configs: 从 config.yaml scoring 传入的因子配置列表.
+        market_cap_fetcher: 市值抓取器 (注入 market_cap 因子).
+        special_signals: 特殊信号开关配置.
+        返回 (scanner, pool, scoring, scan_task, score_task)
+        """
+        from cryptopilot.strategy.scanner import MarketScanner, Candidate
+        from cryptopilot.strategy.candidate import CandidatePool
+        from cryptopilot.strategy.scoring import ScoringEngine
+        from cryptopilot.strategy.base import Signal as BaseSignal
+        from cryptopilot.market.types import StreamMessage
+
+        pool = CandidatePool(max_size=20, ttl_seconds=60)
+        scoring = ScoringEngine(
+            cache=cache,
+            buy_threshold=buy_threshold,
+            sell_threshold=sell_threshold,
+            min_confidence=min_confidence,
+        )
+
+        # 加载因子配置
+        if factor_configs:
+            scoring.configure(factor_configs)
+
+        # 注入 market_cap_fetcher 到 market_cap 因子
+        if market_cap_fetcher:
+            for factor in scoring._factors:
+                if factor.name == "market_cap" and hasattr(factor, "set_fetcher"):
+                    factor.set_fetcher(market_cap_fetcher)
+
+        logger.info(f"评分引擎已加载 {scoring.factor_count} 个因子: {scoring.factor_names()}")
+
+        scanner = MarketScanner(
+            cache=cache,
+            candidate_pool=pool,
+            scan_interval=scan_interval,
+            min_change_pct=0.8,
+            volume_mult=1.3,
+            oi_change_threshold=2.0,
+            min_score=25.0,
+            max_symbols_to_scan=200,
+        )
+
+        sig_cfg = special_signals or {}
+        _signal_tracker: dict[str, set[str]] = {}
+        _prev_funding: dict[str, float] = {}
+
+        async def scoring_loop():
+            """评分循环: 5s 取候选 → 评分 → 最强1信号."""
+            score_heartbeat = 0
+            while True:
+                await asyncio.sleep(scan_interval)
+                score_heartbeat += 1
+                try:
+                    top = await pool.pop_top(top_k)
+                    if score_heartbeat % 12 == 0:
+                        logger.info(f"评分心跳: 候选池={pool.size}个, 本轮评分={len(top)}个")
+
+                    best_signal = None
+                    best_score = 0.0
+                    signals_produced = 0
+
+                    for cand in top:
+                        # REST 按需拉取: K线 + OI历史 + 标记价 → 填入缓存供因子使用
+                        if rest_data:
+                            try:
+                                klines = await rest_data.fetch_klines(cand.symbol, "1m", limit=50)
+                                klines_5m = await rest_data.fetch_klines(cand.symbol, "5m", limit=50)
+                                klines_4h = await rest_data.fetch_klines(cand.symbol, "4h", limit=200)
+                                oi_change = await rest_data.calc_oi_change_pct(cand.symbol, 60)
+                                mp = await rest_data.fetch_mark_price(cand.symbol)
+
+                                # 填入 MarketDataCache 供因子使用
+                                for k in klines:
+                                    await cache.update(StreamMessage(stream="rest", data=k))
+                                for k in klines_5m:
+                                    k.interval = "5m"
+                                    await cache.update(StreamMessage(stream="rest", data=k))
+                                for k in klines_4h:
+                                    k.interval = "4h"
+                                    await cache.update(StreamMessage(stream="rest", data=k))
+                                if mp:
+                                    await cache.update(StreamMessage(stream="rest", data=mp))
+
+                                # 更新 candidate 的 OI 变化和费率 (更精确的 REST 数据)
+                                if oi_change != 0:
+                                    cand.oi_change_pct = oi_change
+                                if mp:
+                                    cand.funding_rate = mp.funding_rate
+                                    cand.mark_price = mp.mark_price
+                            except Exception:
+                                logger.debug(f"REST 预取失败 {cand.symbol}")
+
+                        result = scoring.score(cand)
+                        sym = cand.symbol
+
+                        # ---- 特殊信号检测 ----
+                        dark_flow = False
+                        funding_deterioration = False
+
+                        # ⚡ 暗流涌动: OI涨 + 价不动
+                        if sig_cfg.get("dark_flow") and abs(cand.change_24h_pct) < 1.0 and cand.oi_change_pct > 3.0:
+                            dark_flow = True
+                            msg = f"⚡暗流涌动: {sym} OI+{cand.oi_change_pct:.1f}% 价{cand.change_24h_pct:+.1f}% → 最佳埋伏时机"
+                            logger.warning(msg)
+                            if notifier:
+                                from cryptopilot.notification.notifier import EventData, Events
+                                notifier.notify(EventData(event=Events.WARNING, message=msg, symbol=sym))
+
+                        # 🔥 费率加速恶化: 当前费率比上次更负
+                        if sig_cfg.get("funding_deterioration"):
+                            prev = _prev_funding.get(sym)
+                            if prev is not None and cand.funding_rate < prev and cand.funding_rate < 0:
+                                funding_deterioration = True
+                                msg = f"🔥费率恶化: {sym} {prev*100:.4f}% → {cand.funding_rate*100:.4f}% → 轧空燃料堆积"
+                                logger.warning(msg)
+                                if notifier:
+                                    from cryptopilot.notification.notifier import EventData, Events
+                                    notifier.notify(EventData(event=Events.WARNING, message=msg, symbol=sym))
+                        _prev_funding[sym] = cand.funding_rate
+
+                        # ⭐ 双榜追踪: 同一币种在多个策略中上榜
+                        if sig_cfg.get("double_rank"):
+                            tracker = _signal_tracker.setdefault(sym, set())
+                            tracker.add("scanner")
+                            if len(tracker) >= 2:
+                                msg = f"⭐双榜共振: {sym} 同时被 {', '.join(tracker)} 策略选中"
+                                logger.warning(msg)
+                                if notifier:
+                                    from cryptopilot.notification.notifier import EventData, Events
+                                    notifier.notify(EventData(event=Events.WARNING, message=msg, symbol=sym))
+
+                        # 📦 收筹告警: 横盘>90天 + OI异动
+                        if sig_cfg.get("accumulation_alert"):
+                            from cryptopilot.strategy.detectors.sideways_detector import SidewaysDetector
+                            sd = SidewaysDetector()
+                            sr = sd.detect(sym, cache)
+                            if sr.sideways_days >= 90 and abs(cand.oi_change_pct) > 3.0:
+                                msg = f"📦收筹告警: {sym} 横盘{sr.sideways_days}天 + OI{cand.oi_change_pct:+.1f}% → 可能即将拉盘"
+                                logger.warning(msg)
+                                if notifier:
+                                    from cryptopilot.notification.notifier import EventData, Events
+                                    notifier.notify(EventData(event=Events.WARNING, message=msg, symbol=sym))
+
+                        # 正常信号产出
+                        if result.direction == "HOLD":
+                            continue
+                        if result.confidence < min_confidence:
+                            continue
+
+                        # 暗流信号增强
+                        abs_score = abs(result.total_score)
+                        if dark_flow:
+                            abs_score *= 1.2  # 暗流加成
+
+                        # 追踪最强信号
+                        if abs_score > best_score:
+                            best_score = abs_score
+                            best_signal = BaseSignal(
+                                strategy_id=f"scanner_{result.symbol}",
+                                symbol=result.symbol,
+                                action=f"OPEN_{result.direction}",
+                                order_type="MARKET",
+                                price=cand.current_price,
+                                stop_loss_pct=3.0,
+                                take_profit_pct=6.0,
+                                comment=result.detail,
+                            )
+
+                    # 每轮仅执行最强信号
+                    if best_signal is not None and signals_produced < max_signals_per_cycle:
+                        await self._signal_queue.put(best_signal)
+                        signals_produced += 1
+                        msg = f"雷达信号: {best_signal.comment}"
+                        logger.info(msg)
+                        if notifier:
+                            from cryptopilot.notification.notifier import EventData, Events
+                            notifier.notify(EventData(
+                                event=Events.WARNING, message=msg, symbol=best_signal.symbol))
+
+                except Exception:
+                    logger.exception("评分循环异常")
+
+        scan_task = asyncio.create_task(scanner.start(), name="market_scanner")
+        score_task = asyncio.create_task(scoring_loop(), name="scoring_loop")
+        strategy_type = special_signals.get("_preset_name", "custom") if special_signals else "custom"
+        logger.info(
+            f"统一扫描已启动: 间隔={scan_interval}s, TopK={top_k}, "
+            f"每轮最多{max_signals_per_cycle}仓, 策略={strategy_type}"
+        )
+
+        return scanner, pool, scoring, scan_task, score_task
+
+    # ----------------------------------------------------------------
+    # Status
+    # ----------------------------------------------------------------
+
+    def get_status(self, strategy_id: str | None = None) -> list[dict]:
+        """Return status info for all strategies (or one)."""
+        sids = [strategy_id] if strategy_id else list(self._strategies.keys())
+        result = []
+        for sid in sids:
+            s = self._strategies.get(sid)
+            if s:
+                result.append({
+                    "strategy_id": sid,
+                    "symbol": s.symbol,
+                    "enabled": s.enabled,
+                    "paused": s.paused,
+                    "has_position": s.has_position(),
+                    "has_open_order": s.has_open_order(),
+                })
+        return result
+
+    @property
+    def active_count(self) -> int:
+        return len([s for s in self._strategies.values() if s.enabled and not s.paused])
+
+    @property
+    def total_count(self) -> int:
+        return len(self._strategies)
