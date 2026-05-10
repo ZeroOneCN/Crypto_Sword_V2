@@ -366,6 +366,17 @@ load();setInterval(load,REFRESH_MS);
 </html>"""
 
 
+def add_dashboard_route(app: FastAPI) -> None:
+    """Add dashboard route to an existing FastAPI app."""
+    @app.get("/dashboard", response_class=HTMLResponse)
+    async def dashboard():
+        return DASHBOARD_HTML
+
+    @app.get("/", response_class=HTMLResponse)
+    async def root():
+        return DASHBOARD_HTML
+
+
 def create_dashboard_app() -> FastAPI:
     """Create a standalone FastAPI app serving the dashboard."""
     app = FastAPI(docs_url=None, redoc_url=None)
