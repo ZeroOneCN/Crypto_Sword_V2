@@ -120,8 +120,8 @@ class FillRepository:
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    async def create(self, fill: FillRecord) -> int:
-        fill.filled_at = iso_now()
+    async def create(self, fill: FillRecord, filled_at: str = "") -> int:
+        fill.filled_at = filled_at or iso_now()
         sql = """
             INSERT INTO fills (order_id, price, qty, commission, commission_asset, filled_at)
             VALUES (?, ?, ?, ?, ?, ?)

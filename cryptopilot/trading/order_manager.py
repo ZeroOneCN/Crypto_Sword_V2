@@ -53,7 +53,7 @@ class OrderManager:
         if status in ("FILLED", "CANCELED", "EXPIRED", "REJECTED"):
             self._open_orders.pop(client_order_id, None)
 
-    async def record_fill(self, order_db_id: int, price: float, qty: float, commission: float = 0, asset: str = "") -> int:
+    async def record_fill(self, order_db_id: int, price: float, qty: float, commission: float = 0, asset: str = "", filled_at: str = "") -> int:
         """Record a fill event."""
         from cryptopilot.persistence.models import FillRecord
 
@@ -64,7 +64,7 @@ class OrderManager:
             commission=commission,
             commission_asset=asset,
         )
-        return await self._fill_repo.create(rec)
+        return await self._fill_repo.create(rec, filled_at=filled_at)
 
     async def get_open_orders(self, symbol: str | None = None) -> list[dict]:
         """Get currently tracked open orders."""

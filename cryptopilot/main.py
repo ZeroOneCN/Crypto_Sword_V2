@@ -360,6 +360,7 @@ async def main() -> None:
                                     price=t.price, qty=t.qty,
                                     commission=t.commission,
                                     asset=t.commission_asset,
+                                    filled_at=created,
                                 )
                                 total_fills += 1
                         except Exception:

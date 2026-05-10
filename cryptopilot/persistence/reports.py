@@ -170,15 +170,15 @@ class ReportGenerator:
     # ----------------------------------------------------------------
 
     def _derive_trades(self, fills: list[dict]) -> list[TradeSummary]:
-        """从 fills 推导完整交易: 按币种+策略分组, BUY→SELL 配对."""
-        # 按 (symbol, strategy_name) 分组
-        grouped: dict[tuple, list[dict]] = {}
+        """从 fills 推导完整交易: 按币种分组, BUY→SELL 配对."""
+        # 按 symbol 分组 (不按 strategy_name, 避免拆散配对)
+        grouped: dict[str, list[dict]] = {}
         for f in fills:
-            key = (f.get("symbol", ""), f.get("strategy_name", ""))
-            grouped.setdefault(key, []).append(f)
+            sym = f.get("symbol", "")
+            grouped.setdefault(sym, []).append(f)
 
         trades = []
-        for (sym, strategy), sym_fills in grouped.items():
+        for sym, sym_fills in grouped.items():
             i = 0
             while i < len(sym_fills) - 1:
                 entry = sym_fills[i]
@@ -204,7 +204,7 @@ class ReportGenerator:
                         trades.append(TradeSummary(
                             symbol=sym,
                             side=entry.get("side", ""),
-                            strategy=strategy,
+                            strategy=entry.get("strategy_name", ""),
                             entry_qty=eq,
                             entry_price=ep,
                             exit_price=xp,
