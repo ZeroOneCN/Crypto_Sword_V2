@@ -1127,6 +1127,11 @@ async def _execute_signal(
     acct = await executor.get_account_info()
     circuit_breaker.update(acct.total_balance)
 
+    # 检测持仓模式: 单向模式不传 positionSide
+    is_hedge = await executor.get_position_mode()
+    if not is_hedge:
+        pos_side = ""
+
     if circuit_breaker.tripped:
         return
 

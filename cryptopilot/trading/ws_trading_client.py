@@ -283,7 +283,7 @@ class WSTradingClient:
             params["stopPrice"] = stopPrice
         if reduceOnly:
             params["reduceOnly"] = reduceOnly
-        if positionSide != "BOTH":
+        if positionSide and positionSide != "BOTH":
             params["positionSide"] = positionSide
         if type == "LIMIT":
             params["timeInForce"] = timeInForce

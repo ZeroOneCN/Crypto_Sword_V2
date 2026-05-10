@@ -729,6 +729,16 @@ class OrderExecutor:
             pass
         return None
 
+    async def get_position_mode(self) -> bool:
+        """检测账户持仓模式: True=双向对冲, False=单向.
+        调用 GET /fapi/v1/positionSide/dual (有签名)."""
+        try:
+            resp = await self._signed_request("GET", "/fapi/v1/positionSide/dual", {})
+            return bool(resp.get("dualSidePosition", False))
+        except Exception:
+            logger.warning("获取持仓模式失败, 默认单向")
+            return False
+
     # ----------------------------------------------------------------
     # Internal — URL selection
     # ----------------------------------------------------------------
@@ -766,7 +776,7 @@ class OrderExecutor:
             "quantity": str(req.quantity),
             "newClientOrderId": req.client_order_id,
         }
-        if req.position_side != "BOTH" and self._config.exchange.trading_type == "futures":
+        if req.position_side and req.position_side != "BOTH" and self._config.exchange.trading_type == "futures":
             params["positionSide"] = req.position_side
         if req.order_type == "LIMIT":
             params["price"] = str(req.price)
