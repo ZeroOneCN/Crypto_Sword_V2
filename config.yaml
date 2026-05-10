@@ -19,11 +19,11 @@ market_data:
   ws_reconnect_base_delay: 1
 
 risk:
-  max_daily_loss_pct: 2.0    # Stop all trading if daily PnL drops below -2%
+  max_daily_loss_pct: 8.0    # Stop all trading if daily PnL drops below -8% (容纳3-4连败)
   max_positions: 5           # Maximum concurrent positions across all strategies
-  max_position_pct: 30       # Max single position size as % of account
+  max_position_pct: 15       # Max single position size as % of account (100U安全线)
   max_leverage: 10           # Hard cap on leverage
-  default_leverage: 5        # Default leverage per strategy
+  default_leverage: 3        # Default leverage per strategy (山寨币适中)
 
 order:
   default_type: market       # market or limit

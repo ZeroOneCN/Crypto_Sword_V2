@@ -355,7 +355,7 @@ class StrategyEngine:
                                 action=f"OPEN_{result.direction}",
                                 order_type="MARKET",
                                 price=cand.current_price,
-                                stop_loss_pct=3.0,
+                                stop_loss_pct=5.0,
                                 take_profit_pct=6.0,
                                 comment=result.detail,
                                 score=result.total_score,

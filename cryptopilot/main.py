@@ -1148,7 +1148,7 @@ async def _execute_signal(
         except Exception:
             logger.debug(f"杠杆/保证金设置跳过 {signal.symbol} (可能已设置或不支持)", exc_info=True)
 
-        stop_loss_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 3.0)
+        stop_loss_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 5.0)  # 山寨币波动大, 3%太窄
         qty = position_sizer.calculate(
             balance=acct.available_balance,
             entry_price=entry_price,
@@ -1254,7 +1254,7 @@ async def _execute_signal(
         sl_price = 0.0
         if fill_price > 0:
             risk = risk_config or {}
-            sl_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 3.0)
+            sl_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 5.0)
             if pos_side == "LONG":
                 sl_price = fill_price * (1 - sl_pct / 100)
             else:
