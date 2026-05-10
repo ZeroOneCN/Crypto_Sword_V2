@@ -223,6 +223,9 @@ async def main() -> None:
         f"{len(await order_manager.get_open_orders())} 个挂单"
     )
 
+    # ---- 信号日志 (用于 Web 展示) ----
+    from cryptopilot.web.health import add_signal_log
+
     # 把 WS 客户端注入 _execute_signal 全局引用
     _execute_signal.ws_trader = ws_trader
     _execute_signal.use_ws = ws_trader_connected
@@ -530,6 +533,7 @@ async def main() -> None:
         report_generator=report_generator,
         margin_monitor=margin_monitor,
         candidate_pool=candidate_pool,
+        scoring_engine=scoring_engine,
     )
     add_dashboard_route(health_app)
 

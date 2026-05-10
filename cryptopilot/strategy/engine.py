@@ -228,6 +228,20 @@ class StrategyEngine:
                     best_score = 0.0
                     signals_produced = 0
 
+                    # 每 30s 输出一次候选评分明细 (方便调试)
+                    if score_heartbeat % 6 == 0 and top:
+                        for cand in top[:1]:
+                            try:
+                                if rest_data:
+                                    klines = await rest_data.fetch_klines(cand.symbol, "1m", limit=10)
+                                    for k in klines:
+                                        await cache.update(StreamMessage(stream="rest", data=k))
+                                r = scoring.score(cand)
+                                active_factors = [f"{fs.name}({fs.direction},{fs.score:.0f})" for fs in r.factors if fs.direction != "NEUTRAL"]
+                                logger.info(f"评分诊断 [{r.symbol}]: score={r.total_score:.1f}/{buy_threshold} 活跃因子={active_factors}")
+                            except Exception:
+                                pass
+
                     for cand in top:
                         # REST 按需拉取: K线 + OI历史 + 标记价 → 填入缓存供因子使用
                         if rest_data:
@@ -312,6 +326,9 @@ class StrategyEngine:
 
                         # 正常信号产出
                         if result.direction == "HOLD":
+                            # 记录接近阈值的候选 (方便调试)
+                            if abs(result.total_score) > buy_threshold * 0.6 and score_heartbeat % 3 == 0:
+                                logger.info(f"评分接近阈值: {sym} score={result.total_score:.1f} (阈值={buy_threshold}) 因子投票: {[(fs.name, fs.direction, fs.score) for fs in result.factors[:5]]}")
                             continue
                         if result.confidence < min_confidence:
                             continue
@@ -345,6 +362,20 @@ class StrategyEngine:
                             from cryptopilot.notification.notifier import EventData, Events
                             notifier.notify(EventData(
                                 event=Events.WARNING, message=msg, symbol=best_signal.symbol))
+
+                        # 记录信号日志 (供 Web 展示)
+                        try:
+                            from cryptopilot.web.health import add_signal_log
+                            add_signal_log({
+                                "time": __import__("datetime").datetime.now(
+                                    __import__("datetime").timezone.utc).isoformat(),
+                                "symbol": best_signal.symbol,
+                                "action": best_signal.action,
+                                "score": round(best_score, 1),
+                                "detail": best_signal.comment,
+                            })
+                        except Exception:
+                            pass
 
                 except Exception:
                     logger.exception("评分循环异常")

@@ -8,6 +8,18 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 
+# 全局信号日志 (环形缓冲区, 最多保留 200 条)
+_signal_log: list[dict] = []
+_MAX_SIGNAL_LOG = 200
+
+
+def add_signal_log(entry: dict) -> None:
+    """向全局信号日志追加一条记录."""
+    _signal_log.append(entry)
+    if len(_signal_log) > _MAX_SIGNAL_LOG:
+        _signal_log[:50] = []  # 批量裁剪, 避免 O(n) 弹出
+
+
 def create_health_app(
     strategy_engine=None,
     position_manager=None,
@@ -18,6 +30,7 @@ def create_health_app(
     report_generator=None,
     margin_monitor=None,
     candidate_pool=None,
+    scoring_engine=None,
 ) -> FastAPI:
     """Build the FastAPI app with injected dependencies."""
 
@@ -174,6 +187,47 @@ def create_health_app(
             "scanner_score": round(target.scanner_score, 1),
             "reasons": target.scrape_reasons,
         }
+
+    @app.get("/health/signals")
+    async def health_signals():
+        """返回最近信号日志."""
+        return {"total": len(_signal_log), "signals": list(_signal_log[-50:])}
+
+    @app.get("/health/scoring-detail")
+    async def health_scoring_detail():
+        """返回候选池 Top-K 的因子评分明细."""
+        if candidate_pool is None:
+            return {"error": "候选池不可用"}
+        candidates = await candidate_pool.get_all()
+        if not candidates:
+            return {"candidates": []}
+
+        result = []
+        for cand in sorted(candidates, key=lambda c: c.scanner_score, reverse=True)[:5]:
+            factors_info = []
+            if scoring_engine:
+                try:
+                    sr = scoring_engine.score(cand)
+                    factors_info = [
+                        {
+                            "name": fs.name,
+                            "score": fs.score,
+                            "weight": fs.weight,
+                            "direction": fs.direction,
+                            "detail": fs.detail,
+                        }
+                        for fs in sr.factors
+                    ]
+                except Exception:
+                    pass
+            result.append({
+                "symbol": cand.symbol,
+                "price": round(cand.current_price, 4),
+                "change_24h": round(cand.change_24h_pct, 2),
+                "scanner_score": round(cand.scanner_score, 1),
+                "factors": factors_info,
+            })
+        return {"candidates": result}
 
     @app.exception_handler(Exception)
     async def generic_handler(request, exc):

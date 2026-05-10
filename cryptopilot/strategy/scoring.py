@@ -115,9 +115,13 @@ class ScoringEngine:
                 directional_score -= fs.weighted
 
         # 归一化到 [-100, 100]
-        total_weight_all = sum(f.weight for f in self._factors)
-        if total_weight_all > 0:
-            norm_score = (directional_score / total_weight_all)
+        # 只对有方向信号的因子做归一化, 避免被 NEUTRAL 因子稀释
+        active_weight = sum(
+            f.weight for fs, f in zip(factor_scores, self._factors)
+            if fs.direction != "NEUTRAL"
+        )
+        if active_weight > 0:
+            norm_score = (directional_score / active_weight)
         else:
             norm_score = 0
 
