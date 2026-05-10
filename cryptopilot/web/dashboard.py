@@ -94,14 +94,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <!-- Row 2: System Status + Positions -->
 <div class="grid">
   <div class="card">
-    <h2>系统 & 风控 <span class="hint" id="hint_ws"></span></h2>
+    <h2>系统 & 风控 <span class="hint" id="hint_sys"></span></h2>
     <div class="inline-stat"><span>行情源</span><span id="sys_ws">--</span></div>
     <div class="inline-stat"><span>熔断</span><span id="sys_cb">--</span></div>
-    <div class="inline-stat"><span>当日盈亏</span><span id="sys_daily_pnl">--</span></div>
-    <div class="inline-stat"><span>保证金监控</span><span id="sys_margin">--</span></div>
-    <div class="inline-stat"><span>警告/危急阈值</span><span id="sys_margin_pct">--</span></div>
-    <div class="inline-stat"><span>扫描候选池</span><span id="sys_pool">--</span></div>
-    <div class="inline-stat"><span>数据源模式</span><span id="sys_mode">--</span></div>
+    <div class="inline-stat"><span>当日净盈亏</span><span id="sys_daily_pnl">--</span></div>
+    <div class="inline-stat"><span>保证金率</span><span id="sys_margin_ratio">--</span></div>
+    <div class="inline-stat"><span>保证金监控</span><span id="sys_margin_mon">--</span></div>
+    <div class="inline-stat"><span>候选池 / 扫描</span><span id="sys_pool">--</span></div>
+    <div class="inline-stat"><span>挂单 (保护单)</span><span id="sys_orders">--</span></div>
   </div>
 
   <div class="card">
@@ -218,59 +218,86 @@ async function load() {
     }
   } catch(e) {}
 
-  // ---- Health (System) ----
-  let wsOk = false;
+  // ---- System & Risk ----
+  let wsOk = false, dailyPnl = 0, poolSize = 0;
   try {
-    const r = await fetch('/health');
-    const d = await r.json();
-    wsOk = d.websocket_connected;
-    document.getElementById('sys_ws').innerHTML = wsOk ? '<span class="conn-dot ok pulse"></span>WebSocket 已连接' : '<span class="conn-dot err"></span>WebSocket 断开';
-    document.getElementById('hint_ws').textContent = 'v' + d.version;
+    const [hR, cbR, acctR, pnlR, ordR, candR] = await Promise.all([
+      fetch('/health'),
+      fetch('/health/circuit'),
+      fetch('/health/account'),
+      fetch('/health/pnl'),
+      fetch('/health/orders?_=' + Date.now()),
+      fetch('/health/candidates'),
+    ]);
+    const hD = await hR.json();
+    const cbD = await cbR.json();
+    const acctD = await acctR.json();
+    const pnlD = await pnlR.json();
+    const ordD = await ordR.json();
+    const candD = await candR.json();
+
+    wsOk = hD.websocket_connected;
+    dailyPnl = pnlD.net_pnl_1d || 0;
+
+    // 行情源
+    document.getElementById('sys_ws').innerHTML = wsOk
+      ? '<span class="conn-dot ok pulse"></span>WebSocket 已连接'
+      : '<span class="conn-dot err"></span>WebSocket 断开';
+    document.getElementById('hint_sys').textContent = 'v' + hD.version;
+
+    // 熔断 + 当日盈亏
+    const tripped = cbD.tripped;
+    document.getElementById('sys_cb').innerHTML = tripped
+      ? '<span class="badge badge-err">已熔断</span>'
+      : '<span class="badge badge-ok">正常</span>';
+    document.getElementById('sys_daily_pnl').innerHTML = '<span class="' + cn(dailyPnl) + '">' + fmtUSD(dailyPnl) + '</span>';
+
+    // 风控状态卡片
+    const cbEl = document.getElementById('stat_cb');
+    cbEl.textContent = tripped ? '已熔断' : '正常';
+    cbEl.style.color = tripped ? '#f87171' : '#4ade80';
+
+    // 保证金率 (从 account API)
+    const mrPct = (acctD.margin_ratio || 0) * 100;
+    document.getElementById('sys_margin_ratio').innerHTML = '<span style="color:' + (mrPct > 80 ? '#f87171' : mrPct > 50 ? '#fbbf24' : '#4ade80') + '">' + mrPct.toFixed(2) + '%</span>';
+    document.getElementById('stat_margin').querySelector('.value').textContent = mrPct.toFixed(2) + '%';
+    document.getElementById('stat_margin').querySelector('.value').style.color = mrPct > 80 ? '#f87171' : mrPct > 50 ? '#fbbf24' : '#4ade80';
+
+    // 保证金监控
+    try {
+      const mgR = await fetch('/health/margin');
+      const mgD = await mgR.json();
+      if (!mgD.error) {
+        const warnPct = (mgD.warning_threshold * 100).toFixed(0);
+        const critPct = (mgD.critical_threshold * 100).toFixed(0);
+        document.getElementById('sys_margin_mon').innerHTML = mgD.running
+          ? '<span class="badge badge-ok">运行中</span> ' + warnPct + '%/' + critPct + '%'
+          : '<span class="badge badge-err">未启动</span>';
+      }
+    } catch(e) {}
+
+    // 候选池
+    poolSize = (candD && candD.total) ? candD.total : 0;
+    document.getElementById('sys_pool').textContent = poolSize + ' 个候选 / 扫描中';
+
+    // 挂单 (保护单统计)
+    let slCount = 0, tpCount = 0, totalOrders = 0;
+    if (!ordD.error && ordD.by_symbol) {
+      ordD.by_symbol.forEach(s => { slCount += s.stop_orders; tpCount += s.tp_orders; totalOrders += s.total; });
+    }
+    document.getElementById('sys_orders').innerHTML = (slCount > 0 || tpCount > 0)
+      ? '<span class="badge badge-ok">SL:' + slCount + ' TP:' + tpCount + '</span> 共' + totalOrders + '单'
+      : '<span class="badge badge-warn">无保护单</span> 共' + totalOrders + '单';
+    window._ordBySymbol = ordD.by_symbol || [];
   } catch(e) {
     document.getElementById('sys_ws').innerHTML = '<span class="conn-dot err"></span>无法连接';
   }
 
-  // ---- Circuit Breaker ----
-  try {
-    const r = await fetch('/health/circuit');
-    const d = await r.json();
-    if (!d.error) {
-      const tripped = d.tripped;
-      document.getElementById('sys_cb').innerHTML = tripped ? '<span class="badge badge-err">已熔断</span>' : '<span class="badge badge-ok">正常</span>';
-      document.getElementById('sys_daily_pnl').innerHTML = '<span class="' + cn(d.daily_pnl) + '">' + fmtUSD(d.daily_pnl) + '</span>';
-      // Update stat card
-      const cbEl = document.getElementById('stat_cb');
-      cbEl.textContent = tripped ? '已熔断' : '正常';
-      cbEl.style.color = tripped ? '#f87171' : '#4ade80';
-    }
-  } catch(e) {}
-
-  // ---- Margin Monitor ----
-  try {
-    const r = await fetch('/health/margin');
-    const d = await r.json();
-    if (!d.error) {
-      document.getElementById('sys_margin').innerHTML = d.running ? '<span class="badge badge-ok">运行中</span>' : '<span class="badge badge-err">未启动</span>';
-      document.getElementById('sys_margin_pct').textContent = (d.warning_threshold * 100).toFixed(0) + '% / ' + (d.critical_threshold * 100).toFixed(0) + '%';
-    }
-  } catch(e) {}
-
-  // ---- System mode info ----
-  try {
-    document.getElementById('sys_mode').textContent = 'ws_ok' in window && window.ws_ok ? 'WebSocket 实时' : 'WebSocket / REST 降级';
-  } catch(e) {}
-
-  // ---- Protection orders ----
+  // ---- Protection orders map (for position table) ----
   let protBySymbol = {};
-  try {
-    const r = await fetch('/health/orders?_=' + Date.now());
-    const d = await r.json();
-    if (!d.error && d.by_symbol) {
-      d.by_symbol.forEach(s => {
-        protBySymbol[s.symbol] = { sl: s.stop_orders, tp: s.tp_orders, total: s.total };
-      });
-    }
-  } catch(e) {}
+  (window._ordBySymbol || []).forEach(s => {
+    protBySymbol[s.symbol] = { sl: s.stop_orders, tp: s.tp_orders, total: s.total };
+  });
 
   // ---- Positions detail ----
   try {
