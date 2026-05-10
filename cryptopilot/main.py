@@ -797,6 +797,8 @@ async def main() -> None:
         order_executor=order_executor,
         scanner=scanner_obj,
         preset_name=active_preset,
+        signal_queue=signal_queue,
+        cache=data_cache,
     )
     add_dashboard_route(health_app)
 

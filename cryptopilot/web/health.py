@@ -151,6 +151,8 @@ def create_health_app(
     order_executor=None,
     scanner=None,
     preset_name: str = "composite",
+    signal_queue=None,          # 测试开单用
+    cache=None,                 # 市场数据缓存 (测试开单用)
 ) -> FastAPI:
     """Build the FastAPI app with injected dependencies."""
 
@@ -505,6 +507,77 @@ def create_health_app(
         except Exception as exc:
             logger.exception("health endpoint failed")
             return {"error": "Internal server error"}
+
+    @app.post("/health/test-trade")
+    async def health_test_trade(symbol: str = "", side: str = "LONG"):
+        """测试开单: 注入一条合成信号到信号队列.
+
+        可选 query params:
+          - symbol: 币种 (如 BTCUSDT), 不填则自动选候选池最强
+          - side: LONG 或 SHORT (默认 LONG)
+        """
+        from cryptopilot.strategy.base import Signal
+
+        if signal_queue is None:
+            return JSONResponse({"error": "信号队列未注入, 无法测试"}, status_code=400)
+
+        # 选币: 未指定则自动从候选池或行情中取
+        target_symbol = (symbol or "").upper().strip()
+        if not target_symbol:
+            if candidate_pool is not None:
+                all_cands = await candidate_pool.get_all()
+                if all_cands:
+                    target_symbol = max(all_cands, key=lambda c: c.scanner_score).symbol
+            if not target_symbol and cache is not None:
+                # 从缓存取一个活跃币种
+                syms = [s for s in cache.all_symbols() if s.endswith("USDT")]
+                if syms:
+                    target_symbol = syms[0]
+            if not target_symbol:
+                target_symbol = "BTCUSDT"  # 兜底
+
+        # 取当前价
+        price = 0.0
+        if cache is not None:
+            tick = cache.get_ticker(target_symbol)
+            if tick:
+                price = tick.last_price
+        if price <= 0 and order_executor is not None:
+            try:
+                tick = await order_executor.get_ticker_price(target_symbol)
+                if tick:
+                    price = tick
+            except Exception:
+                pass
+
+        side_upper = side.upper()
+        action = "OPEN_LONG" if side_upper == "LONG" else "OPEN_SHORT"
+
+        signal = Signal(
+            strategy_id=f"test_{target_symbol}",
+            symbol=target_symbol,
+            action=action,
+            order_type="MARKET",
+            price=price,
+            stop_loss_pct=3.0,
+            take_profit_pct=6.0,
+            comment=f"🧪 测试开单: {target_symbol} {side_upper}",
+            score=60.0,
+            top_factors=[("test", "LONG" if side_upper == "LONG" else "SHORT", 1.0)],
+            preset="manual_test",
+        )
+
+        await signal_queue.put(signal)
+        return {
+            "ok": True,
+            "message": f"测试信号已注入: {action} {target_symbol} @ {price}",
+            "signal": {
+                "symbol": target_symbol,
+                "action": action,
+                "price": price,
+                "score": 60.0,
+            },
+        }
 
     @app.get("/health/signals")
     async def health_signals():
