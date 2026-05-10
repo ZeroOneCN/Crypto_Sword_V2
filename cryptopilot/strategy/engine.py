@@ -205,8 +205,9 @@ class StrategyEngine:
             min_change_pct=1.5,
             volume_mult=1.8,
             oi_change_threshold=3.0,
-            min_score=40.0,
+            min_score=25.0,
             max_symbols_to_scan=200,
+            rest_data=rest_data,
         )
 
         sig_cfg = special_signals or {}

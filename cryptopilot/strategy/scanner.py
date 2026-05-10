@@ -48,6 +48,7 @@ class MarketScanner:
         oi_change_threshold: float = 3.0,
         min_score: float = 40.0,
         max_symbols_to_scan: int = 100,
+        rest_data=None,  # RestDataFetcher (注入以预取K线/OI)
     ) -> None:
         self._cache = cache
         self._pool = candidate_pool
@@ -57,6 +58,7 @@ class MarketScanner:
         self._oi_threshold = oi_change_threshold
         self._min_score = min_score
         self._max_scan = max_symbols_to_scan
+        self._rest_data = rest_data
         self._running = False
 
     async def start(self) -> None:
@@ -95,6 +97,19 @@ class MarketScanner:
             price = ticker.price
             if price <= 0:
                 continue
+
+            # ---- REST 预取 K线 + OI (注入 MarketDataCache 供因子使用) ----
+            if self._rest_data:
+                try:
+                    klines = await self._rest_data.fetch_klines(sym, "1m", limit=30)
+                    from cryptopilot.market.types import StreamMessage
+                    for k in klines:
+                        await self._cache.update(StreamMessage(stream="rest", data=k))
+                    oi = await self._rest_data.calc_oi_change_pct(sym, 60)
+                    if oi != 0:
+                        self._cache._oi_cache[sym] = oi  # 临时注入
+                except Exception:
+                    pass
 
             change = abs(ticker.price_change_pct)
             vol_ratio = 1.0
