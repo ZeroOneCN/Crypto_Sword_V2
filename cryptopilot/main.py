@@ -1249,134 +1249,110 @@ async def _execute_signal(
         _execute_signal._position_open_time = getattr(_execute_signal, '_position_open_time', {})
         _execute_signal._position_open_time[signal.symbol] = time.time()
 
-        # ---- Place Stop-Loss + 3-Tier Take-Profit ----
-        risk = risk_config or {}
-        sl_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 3.0)
-
-        if signal.stop_loss > 0:
-            sl_price = signal.stop_loss
-        elif fill_price > 0:
-            if pos_side == "LONG":
-                sl_price = fill_price * (1 - sl_pct / 100)
-            else:
-                sl_price = fill_price * (1 + sl_pct / 100)
-        else:
-            sl_price = 0
-
-        # 精确计算 TP 价格
-        tp1_pct = float(risk.get("tp1_pct", 3.0))
-        tp2_pct = float(risk.get("tp2_pct", 6.0))
-        tp3_pct = float(risk.get("tp3_pct", 10.0))
-        if pos_side == "LONG":
-            tp1 = fill_price * (1 + tp1_pct / 100)
-            tp2 = fill_price * (1 + tp2_pct / 100)
-            tp3 = fill_price * (1 + tp3_pct / 100)
-        else:
-            tp1 = fill_price * (1 - tp1_pct / 100)
-            tp2 = fill_price * (1 - tp2_pct / 100)
-            tp3 = fill_price * (1 - tp3_pct / 100)
-
-        sl_tp_placed = False
-        sl_success = False
+        # ---- Place Take-Profit orders (LIMIT, 交易所挂单) ----
+        # 注意: STOP_MARKET 已被 Binance 禁用, SL 改由 exit_manager 本地跟踪
+        sl_success = True  # 本地模式始终为 True
+        sl_price = 0.0
         tp_count = 0
         try:
+            # 计算 SL 价格 (仅用于本地跟踪, 不挂交易所单)
+            risk = risk_config or {}
+            sl_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 3.0)
+            if fill_price > 0:
+                if pos_side == "LONG":
+                    sl_price = fill_price * (1 - sl_pct / 100)
+                else:
+                    sl_price = fill_price * (1 + sl_pct / 100)
+
+            # 注册 SL 到 exit_manager (后续由 exit_manager.evaluate 监控触发)
             if sl_price > 0:
-                sl_req = OrderRequest(
+                exit_manager.register_position(
                     symbol=signal.symbol,
-                    side="SELL" if pos_side == "LONG" else "BUY",
-                    order_type="STOP_MARKET",
+                    side=pos_side,
+                    entry_price=fill_price,
                     quantity=qty,
-                    stop_price=sl_price,
-                    reduce_only=True,
-                    position_side=pos_side,
-                    client_order_id=_make_client_id("sl"),
+                    stop_loss=sl_price,
+                    take_profit=0,  # TP 仍由交易所 LIMIT 单处理
                 )
-                sl_result = await executor.create_order(sl_req)
-                await order_manager.record_order(sl_result, signal.strategy_id)
-                sl_success = True
-                logger.info(f"SL 已放置: {signal.symbol} @{sl_price:.5f}")
+                logger.info(f"SL 已注册(本地): {signal.symbol} @{sl_price:.5f} ({sl_pct}%)")
 
-                # TP1 (30% 仓位)
-                tp_reqs = []
-                close_side = "SELL" if pos_side == "LONG" else "BUY"
-                for tp_price, tp_qty_ratio, label in [
-                    (tp1, 0.30, "TP1"), (tp2, 0.30, "TP2"), (tp3, 0.40, "TP3")
-                ]:
-                    tp_qty = qty * tp_qty_ratio
-                    # Precision clamping
-                    filters = executor.get_symbol_filters(signal.symbol)
-                    if filters:
-                        tp_qty = clamp_qty(tp_qty, filters["step_size"],
-                                          filters.get("min_qty", 0), filters["max_qty"])
-                        tp_price_c = clamp_price(tp_price, filters["tick_size"])
-                    else:
-                        tp_price_c = tp_price
-                    if tp_qty > 0:
-                        tp_reqs.append(OrderRequest(
-                            symbol=signal.symbol, side=close_side,
-                            order_type="LIMIT", quantity=tp_qty,
-                            price=tp_price_c, reduce_only=True,
-                            position_side=pos_side,
-                            client_order_id=_make_client_id(label.lower()),
-                            time_in_force="GTC",
-                        ))
-
-                for tp_req in tp_reqs:
-                    try:
-                        tp_r = await executor.create_order(tp_req)
-                        await order_manager.record_order(tp_r, signal.strategy_id)
-                        tp_count += 1
-                    except Exception as exc_tp:
-                        logger.warning(f"TP 下单失败: {tp_req.symbol} {exc_tp}")
-
-                sl_tp_placed = sl_success and tp_count > 0
-                logger.info(
-                    f"保护单: {signal.symbol} SL={sl_price:.5f} "
-                    f"TP1={tp1:.5f}(30%) TP2={tp2:.5f}(30%) TP3={tp3:.5f}(40%) "
-                    f"[{tp_count}/3 个TP已放置]"
-                )
-
-                # 🆕 V2 保护单通知
-                if sl_tp_placed:
-                    sl_pct_val = abs(sl_price - fill_price) / fill_price * 100
-                    tp_placed = []
-                    tp_defs = [(tp1, tp1_pct, 0.30, 1), (tp2, tp2_pct, 0.30, 2), (tp3, tp3_pct, 0.40, 3)]
-                    for tp_price_val, tp_pct_val, tp_ratio_val, tp_tier in tp_defs:
-                        tp_placed.append({
-                            "tier": tp_tier,
-                            "price": tp_price_val,
-                            "pct": tp_pct_val,
-                            "qty_ratio": tp_ratio_val,
-                        })
-                    notifier.protection_placed(
-                        symbol=signal.symbol,
-                        sl_price=sl_price,
-                        sl_pct=sl_pct_val,
-                        tp_tiers=tp_placed,
-                    )
+            # 精确计算 TP 价格
+            risk = risk_config or {}
+            tp1_pct = float(risk.get("tp1_pct", 3.0))
+            tp2_pct = float(risk.get("tp2_pct", 6.0))
+            tp3_pct = float(risk.get("tp3_pct", 10.0))
+            if pos_side == "LONG":
+                tp1 = fill_price * (1 + tp1_pct / 100)
+                tp2 = fill_price * (1 + tp2_pct / 100)
+                tp3 = fill_price * (1 + tp3_pct / 100)
             else:
-                logger.error(f"{signal.symbol} 止损价无效 (sl={sl_price})")
-        except Exception:
-            logger.exception(f"{signal.symbol} SL/TP 提交异常")
+                tp1 = fill_price * (1 - tp1_pct / 100)
+                tp2 = fill_price * (1 - tp2_pct / 100)
+                tp3 = fill_price * (1 - tp3_pct / 100)
 
-        if not sl_tp_placed:
-            logger.error(
-                f"{signal.symbol} SL/TP 放置失败 (SL={sl_success}, TP={tp_count}/3) "
-                f"— 紧急平仓"
+            tp_reqs = []
+            close_side = "SELL" if pos_side == "LONG" else "BUY"
+            for tp_price, tp_qty_ratio, label in [
+                (tp1, 0.30, "TP1"), (tp2, 0.30, "TP2"), (tp3, 0.40, "TP3")
+            ]:
+                tp_qty = qty * tp_qty_ratio
+                # Precision clamping
+                filters = executor.get_symbol_filters(signal.symbol)
+                if filters:
+                    tp_qty = clamp_qty(tp_qty, filters["step_size"],
+                                      filters.get("min_qty", 0), filters["max_qty"])
+                    tp_price_c = clamp_price(tp_price, filters["tick_size"])
+                else:
+                    tp_price_c = tp_price
+                if tp_qty > 0:
+                    tp_reqs.append(OrderRequest(
+                        symbol=signal.symbol, side=close_side,
+                        order_type="LIMIT", quantity=tp_qty,
+                        price=tp_price_c, reduce_only=True,
+                        position_side=pos_side,
+                        client_order_id=_make_client_id(label.lower()),
+                        time_in_force="GTC",
+                    ))
+
+            for tp_req in tp_reqs:
+                try:
+                    tp_r = await executor.create_order(tp_req)
+                    await order_manager.record_order(tp_r, signal.strategy_id)
+                    tp_count += 1
+                except Exception as exc_tp:
+                    logger.warning(f"TP 下单失败: {tp_req.symbol} {exc_tp}")
+
+            sl_tp_placed = sl_success and tp_count > 0
+            logger.info(
+                f"保护单: {signal.symbol} SL={sl_price:.5f} "
+                f"TP1={tp1:.5f}(30%) TP2={tp2:.5f}(30%) TP3={tp3:.5f}(40%) "
+                f"[{tp_count}/3 个TP已放置]"
             )
-            try:
-                await executor.cancel_all_orders(signal.symbol)
-                close_side = "SELL" if pos_side == "LONG" else "BUY"
-                await executor.create_order(OrderRequest(
-                    symbol=signal.symbol, side=close_side,
-                    order_type="MARKET", quantity=qty,
-                    reduce_only=True, position_side=pos_side,
-                    client_order_id=_make_client_id("emergency"),
-                ))
-                await position_manager.sync_from_exchange(executor)
-                logger.warning(f"裸仓已平: {signal.symbol}")
-            except Exception:
-                logger.exception(f"紧急平仓也失败: {signal.symbol}")
+
+            # 🆕 V2 保护单通知
+            if sl_tp_placed:
+                sl_pct_val = abs(sl_price - fill_price) / fill_price * 100
+                tp_placed = []
+                tp_defs = [(tp1, tp1_pct, 0.30, 1), (tp2, tp2_pct, 0.30, 2), (tp3, tp3_pct, 0.40, 3)]
+                for tp_price_val, tp_pct_val, tp_ratio_val, tp_tier in tp_defs:
+                    tp_placed.append({
+                        "tier": tp_tier,
+                        "price": tp_price_val,
+                        "pct": tp_pct_val,
+                        "qty_ratio": tp_ratio_val,
+                    })
+                notifier.protection_placed(
+                    symbol=signal.symbol,
+                    sl_price=sl_price,
+                    sl_pct=sl_pct_val,
+                    tp_tiers=tp_placed,
+                )
+            elif sl_price <= 0:
+                logger.warning(f"{signal.symbol} 止损价无效, SL={sl_price}")
+            else:
+                logger.warning(f"{signal.symbol} TP 未放置 (SL=本地跟踪)")
+        except Exception:
+            logger.exception(f"{signal.symbol} TP 提交异常")
     else:
         close_fill_price = result.avg_price if result.avg_price > 0 else 0.0
         pnl = _calc_pnl(position_manager, signal.symbol, close_fill_price, qty)

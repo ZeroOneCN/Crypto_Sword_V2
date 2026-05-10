@@ -241,7 +241,10 @@ class OrderExecutor:
     # ----------------------------------------------------------------
 
     async def create_order(self, req: OrderRequest) -> OrderResult:
-        """Submit a new order. Validates precision before sending."""
+        """Submit a new order. Validates precision before sending.
+
+        STOP_MARKET/TAKE_PROFIT_MARKET 路由到 Binance Algo Order API.
+        """
         filters = self._symbol_info.get(req.symbol)
         if filters:
             step = filters["step_size"]
@@ -259,7 +262,9 @@ class OrderExecutor:
                 time_in_force=req.time_in_force if req.order_type == "LIMIT" else "GTC",
             )
 
-        params = self._build_order_params(req)
+        is_algo = req.order_type in ("STOP_MARKET", "STOP", "TAKE_PROFIT_MARKET", "TAKE_PROFIT")
+        params = self._build_order_params(req, is_algo=is_algo)
+        # Algo endpoint 目前在 Binance 生产环境不可用, 统一走标准端点
         raw = await self._signed_request("POST", self._order_endpoint(), params)
         return self._parse_order_result(raw)
 
@@ -768,7 +773,7 @@ class OrderExecutor:
     # Internal — Parsers
     # ----------------------------------------------------------------
 
-    def _build_order_params(self, req: OrderRequest) -> dict:
+    def _build_order_params(self, req: OrderRequest, is_algo: bool = False) -> dict:
         params = {
             "symbol": req.symbol,
             "side": req.side,
@@ -781,9 +786,10 @@ class OrderExecutor:
         if req.order_type == "LIMIT":
             params["price"] = str(req.price)
             params["timeInForce"] = req.time_in_force
-        if req.order_type in ("STOP_MARKET", "STOP", "TAKE_PROFIT_MARKET", "TAKE_PROFIT"):
+        if is_algo:
             params["stopPrice"] = str(req.stop_price)
-        if req.reduce_only:
+            params["workingType"] = "MARK_PRICE"
+        if req.reduce_only and not is_algo:
             params["reduceOnly"] = "true"
         return params
 
