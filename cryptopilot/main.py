@@ -1264,17 +1264,9 @@ async def _execute_signal(
                 else:
                     sl_price = fill_price * (1 + sl_pct / 100)
 
-            # 注册 SL 到 exit_manager (后续由 exit_manager.evaluate 监控触发)
+            # SL 价格仅记录 (后续由行情监控线程触发平仓)
             if sl_price > 0:
-                exit_manager.register_position(
-                    symbol=signal.symbol,
-                    side=pos_side,
-                    entry_price=fill_price,
-                    quantity=qty,
-                    stop_loss=sl_price,
-                    take_profit=0,  # TP 仍由交易所 LIMIT 单处理
-                )
-                logger.info(f"SL 已注册(本地): {signal.symbol} @{sl_price:.5f} ({sl_pct}%)")
+                logger.info(f"SL 已记录: {signal.symbol} @{sl_price:.5f} ({sl_pct}% 本地跟踪)")
 
             # 精确计算 TP 价格
             risk = risk_config or {}
