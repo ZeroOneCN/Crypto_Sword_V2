@@ -162,6 +162,59 @@ async def main() -> None:
     order_manager = OrderManager(db)
     position_manager = PositionManager(db)
 
+    # ---- WS 交易客户端 (0 权重下单, 替代 REST) ----
+    from cryptopilot.trading.ws_trading_client import WSTradingClient
+    from cryptopilot.market.user_data_stream import UserDataStream
+
+    ws_trader: WSTradingClient | None = None
+    user_data: UserDataStream | None = None
+    ws_trader_connected = False
+
+    try:
+        ws_trader = WSTradingClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            testnet=cfg.exchange.testnet,
+        )
+        await ws_trader.connect()
+        ws_trader_connected = True
+        logger.info("WS 交易客户端已连接 (0 权重下单)")
+
+        # 用户数据流: 实时监听成交/仓位/账户变动
+        user_data = UserDataStream(
+            api_key=api_key,
+            api_secret=api_secret,
+            testnet=cfg.exchange.testnet,
+            proxy=proxy_url,
+        )
+
+        async def _on_order_update(event: dict):
+            """WS 推送的订单状态变更 → 更新本地订单簿."""
+            try:
+                o = event.get("o", event)
+                cid = o.get("c", "")  # clientOrderId
+                status = o.get("X", "")
+                executed = float(o.get("z", 0))
+                if cid:
+                    await order_manager.update_order(cid, status, executed)
+            except Exception:
+                logger.exception("WS 订单更新处理异常")
+
+        async def _on_account_update(event: dict):
+            """WS 推送的账户/仓位变动 → 同步持仓."""
+            try:
+                await position_manager.sync_from_exchange(order_executor)
+            except Exception:
+                logger.exception("WS 账户更新处理异常")
+
+        user_data.on_order_update(_on_order_update)
+        user_data.on_account_update(_on_account_update)
+        _user_data_task = asyncio.create_task(user_data.start(), name="user_data_stream")
+        logger.info("用户数据流已启动 (实时成交/仓位推送)")
+    except Exception as exc:
+        logger.warning(f"WS 交易客户端不可用, 降级为纯 REST 下单: {exc}")
+        ws_trader_connected = False
+
     # Sync initial state from exchange
     await position_manager.sync_from_exchange(order_executor)
     await order_manager.sync_with_exchange(order_executor)
@@ -169,6 +222,10 @@ async def main() -> None:
         f"初始状态已加载: {position_manager.position_count} 个持仓, "
         f"{len(await order_manager.get_open_orders())} 个挂单"
     )
+
+    # 把 WS 客户端注入 _execute_signal 全局引用
+    _execute_signal.ws_trader = ws_trader
+    _execute_signal.use_ws = ws_trader_connected
 
     # ---- Risk ----
     from cryptopilot.risk.position_sizer import PositionSizer
@@ -682,6 +739,18 @@ async def main() -> None:
     # Stop Telegram
     await telegram.stop()
 
+    # Shutdown WS trading client + user data stream
+    if user_data:
+        await user_data.stop()
+    if '_user_data_task' in dir():
+        _user_data_task.cancel()
+        try:
+            await _user_data_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    if ws_trader:
+        await ws_trader.disconnect()
+
     # Shutdown order executor
     await order_executor.shutdown()
 
@@ -787,7 +856,23 @@ async def _execute_signal(
         reduce_only=signal.action.startswith("CLOSE"),
     )
 
-    result = await executor.create_order(req)
+    # 下单: WS 优先, REST 兜底
+    if getattr(_execute_signal, 'use_ws', False) and _execute_signal.ws_trader:
+        try:
+            raw = await _execute_signal.ws_trader.place_order(
+                symbol=req.symbol, side=req.side, type=req.order_type,
+                quantity=req.quantity, price=req.price if req.price > 0 else None,
+                stopPrice=req.stop_price if req.stop_price > 0 else None,
+                reduceOnly=req.reduce_only, positionSide=req.position_side,
+                newClientOrderId=req.client_order_id,
+            )
+            result = _ws_to_order_result(raw)
+        except Exception:
+            logger.warning("WS 下单失败, 降级 REST")
+            result = await executor.create_order(req)
+    else:
+        result = await executor.create_order(req)
+
     await order_manager.record_order(result, signal.strategy_id)
 
     # Get actual fill price
@@ -895,6 +980,25 @@ def _update_trailing_stops(signal, trailing_stops, executor, cache) -> None:
     if new_stop is not None:
         # Adjust existing exchange stop-loss orders here (future improvement)
         logger.info(f"移动止损已更新 {signal.symbol}: ${new_stop:.4f}")
+
+
+async def _ws_to_order_result(raw: dict):
+    """将 WS 交易 API 返回的 dict 转为 OrderResult."""
+    from cryptopilot.trading.order_executor import OrderResult
+    return OrderResult(
+        symbol=raw.get("symbol", ""),
+        order_id=raw.get("orderId", 0),
+        client_order_id=raw.get("clientOrderId", ""),
+        price=float(raw.get("price", 0) or 0),
+        orig_qty=float(raw.get("origQty", raw.get("qty", 0)) or 0),
+        executed_qty=float(raw.get("executedQty", raw.get("z", 0)) or 0),
+        status=raw.get("status", raw.get("X", "NEW")),
+        side=raw.get("side", ""),
+        order_type=raw.get("type", raw.get("o", "")),
+        position_side=raw.get("positionSide", "BOTH"),
+        avg_price=float(raw.get("avgPrice", raw.get("ap", 0)) or 0),
+        update_time=raw.get("updateTime", raw.get("T", 0)),
+    )
 
 
 async def _emergency_close(order_executor, position_manager) -> None:

@@ -66,7 +66,7 @@ scoring:
 
     # ---- 📊 综合 (Composite): 四维均衡评分 ----
     composite:
-      buy_threshold: 50
+      buy_threshold: 35      # 降低阈值, 更容易出信号
       sell_threshold: -50
       factors:
         - { name: funding, weight: 0.12 }           # 🧊 费率
