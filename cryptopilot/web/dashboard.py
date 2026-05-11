@@ -47,7 +47,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
   }
   body{min-height:100vh;line-height:1.5}
-  .shell{max-width:1500px;margin:0 auto;padding:22px 22px 40px}
+  .shell{width:100%;max-width:none;margin:0;padding:12px 8px 40px}
   .hero{
     position:sticky;top:0;z-index:9;margin-bottom:20px;
     background:rgba(10,10,10,.78);backdrop-filter:blur(18px) saturate(130%);
