@@ -83,6 +83,18 @@ class TpTiersConfig(BaseModel):
     pre_tp_guard_min_roi_pct: float = 0.2
 
 
+class StrategyPresetConfig(BaseModel):
+    """Configuration for one scoring preset in the multi-strategy runtime."""
+
+    enabled: bool = True
+    risk_budget: float = 0.0
+    max_concurrent: int = 1
+    exit_template: str = ""
+    buy_threshold: float = 50.0
+    sell_threshold: float = -50.0
+    factors: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ScoringConfig(BaseModel):
     """Multi-factor scoring engine configuration."""
     active_preset: str = "composite"
@@ -91,7 +103,20 @@ class ScoringConfig(BaseModel):
     min_confidence: float = 0.5
     scan_top_n: int = 100
     scan_interval_sec: int = 300
+    top_k_per_preset: int = 3
+    max_signals_per_cycle: int = 1
     tp_tiers: TpTiersConfig = Field(default_factory=TpTiersConfig)
+    special_signals: dict[str, Any] = Field(default_factory=dict)
+    presets: dict[str, StrategyPresetConfig] = Field(default_factory=dict)
+
+    def enabled_presets(self) -> dict[str, StrategyPresetConfig]:
+        """Return enabled preset configs only."""
+
+        return {
+            name: preset
+            for name, preset in self.presets.items()
+            if preset.enabled
+        }
 
 
 class OrderConfig(BaseModel):

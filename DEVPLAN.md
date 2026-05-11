@@ -37,31 +37,31 @@
 
 ## 阶段二：主扫描链路升级为三策略并跑
 
-- [ ] 将 `config.yaml` 从单 `active_preset` 升级为多 preset 启用配置。
-- [ ] 保留 `ambush`、`chase`、`composite` 现有因子与阈值定义。
-- [ ] 为每个 preset 增加以下配置：
+- [x] 将 `config.yaml` 从单 `active_preset` 升级为多 preset 启用配置。
+- [x] 保留 `ambush`、`chase`、`composite` 现有因子与阈值定义。
+- [x] 为每个 preset 增加以下配置：
   - 是否启用
   - 风险预算
   - 最大并发数
   - 退出模板名或退出参数组
-- [ ] 调整 `cryptopilot/main.py` 扫描启动逻辑，不再只读取单个 `active_preset`。
-- [ ] 为每个启用 preset 启动独立评分执行链，或实现等价的多模板评分流程。
-- [ ] 确保所有发出的信号稳定带上：
+- [x] 调整 `cryptopilot/main.py` 扫描启动逻辑，不再只读取单个 `active_preset`。
+- [x] 为每个启用 preset 启动独立评分执行链，或实现等价的多模板评分流程。
+- [x] 确保所有发出的信号稳定带上：
   - `strategy_id`
   - `preset`
   - `score`
   - `top_factors`
-- [ ] 明确一币一主策略规则：
+- [x] 明确一币一主策略规则：
   - 同一币同一方向同时命中多个策略时，只允许一个主策略实际开仓
   - 其他策略记录为支持信号或拒绝原因
-- [ ] 主策略选择规则固定如下：
+- [x] 主策略选择规则固定如下：
   - 费率 / OI 挤空型优先 `chase`
   - 低市值横盘蓄势型优先 `ambush`
   - 其他归 `composite`
   - 若当前代码短期无法稳定识别机会类型，则先按得分最高策略优先，并记录竞争策略列表
 
-完成说明：待完成。
-验证结果：待完成后补充。
+完成说明：已落地多 preset 启用配置、统一扫描多策略评分入口、同币主策略仲裁、支持信号记录，以及每策略最大并发的主链路拦截。
+验证结果：已执行 `python -m compileall -q cryptopilot preview_dashboard.py`；`/health/strategy` 已升级为多策略结构，启动通知改为展示启用策略集合。
 
 ## 阶段三：持仓、订单、事件统一补齐策略归因
 

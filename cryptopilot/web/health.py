@@ -250,6 +250,7 @@ def create_health_app(
     order_executor=None,
     scanner=None,
     preset_name: str = "composite",
+    preset_configs: dict | None = None,
     signal_queue=None,          # 测试开单用
     cache=None,                 # 市场数据缓存 (测试开单用)
 ) -> FastAPI:
@@ -287,15 +288,42 @@ def create_health_app(
 
     @app.get("/health/strategy")
     async def health_strategy():
-        """Return current strategy preset, scoring thresholds, and factor weights."""
+        """Return current multi-strategy preset status and scoring summaries."""
         result = {
             "preset": preset_name,
+            "enabled_presets": list((preset_configs or {}).keys()),
             "buy_threshold": None,
             "sell_threshold": None,
             "factor_weights": [],
+            "preset_details": {},
             "max_symbols_to_scan": 0,
         }
-        if scoring_engine is not None:
+        if isinstance(scoring_engine, dict) and scoring_engine:
+            primary_name = preset_name if preset_name in scoring_engine else next(iter(scoring_engine.keys()))
+            primary_engine = scoring_engine.get(primary_name)
+            result["preset"] = primary_name
+            result["buy_threshold"] = getattr(primary_engine, "_buy_threshold", None)
+            result["sell_threshold"] = getattr(primary_engine, "_sell_threshold", None)
+            factors = getattr(primary_engine, "_factors", [])
+            result["factor_weights"] = [
+                {"name": f.name, "weight": round(f.weight, 3)}
+                for f in factors
+            ]
+            for name, engine in scoring_engine.items():
+                runtime = (preset_configs or {}).get(name, {})
+                result["preset_details"][name] = {
+                    "enabled": True,
+                    "buy_threshold": getattr(engine, "_buy_threshold", None),
+                    "sell_threshold": getattr(engine, "_sell_threshold", None),
+                    "risk_budget": runtime.get("risk_budget"),
+                    "max_concurrent": runtime.get("max_concurrent"),
+                    "exit_template": runtime.get("exit_template"),
+                    "factor_weights": [
+                        {"name": f.name, "weight": round(f.weight, 3)}
+                        for f in getattr(engine, "_factors", [])
+                    ],
+                }
+        elif scoring_engine is not None:
             result["buy_threshold"] = getattr(scoring_engine, "_buy_threshold", None)
             result["sell_threshold"] = getattr(scoring_engine, "_sell_threshold", None)
             factors = getattr(scoring_engine, "_factors", [])

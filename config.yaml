@@ -53,10 +53,16 @@ scoring:
   buy_threshold: 50
   sell_threshold: -45
   min_confidence: 0.65
+  top_k_per_preset: 3
+  max_signals_per_cycle: 1
 
   presets:
     # ---- 🔥 追多 (Chase Long): 纯费率排名, 短线轧空 ----
     chase:
+      enabled: true
+      risk_budget: 0.25
+      max_concurrent: 2
+      exit_template: chase
       buy_threshold: 50
       sell_threshold: -50
       factors:
@@ -67,6 +73,10 @@ scoring:
 
     # ---- 📊 综合 (Composite): 四维均衡评分 ----
     composite:
+      enabled: true
+      risk_budget: 0.50
+      max_concurrent: 4
+      exit_template: composite
       buy_threshold: 45
       sell_threshold: -45
       factors:
@@ -82,6 +92,10 @@ scoring:
 
     # ---- 🎯 埋伏 (Ambush): 市值优先, 中长线布局 ----
     ambush:
+      enabled: true
+      risk_budget: 0.25
+      max_concurrent: 2
+      exit_template: ambush
       buy_threshold: 55
       sell_threshold: -55
       factors:

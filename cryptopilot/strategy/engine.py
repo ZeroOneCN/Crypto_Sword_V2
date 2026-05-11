@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from loguru import logger
 
 from cryptopilot.market.types import KlineData, TickerData
@@ -144,6 +145,47 @@ class StrategyEngine:
         for sid in list(self._strategies.keys()):
             await self.unregister(sid)
         logger.info("所有策略已停止")
+
+    @staticmethod
+    def classify_opportunity(candidate, score_result) -> str:
+        """Classify a scored opportunity for preset arbitration."""
+
+        funding_rate = abs(getattr(candidate, "funding_rate", 0.0) or 0.0)
+        oi_change = abs(getattr(candidate, "oi_change_pct", 0.0) or 0.0)
+        market_cap_score = 0.0
+        sideways_score = 0.0
+        for factor in score_result.factors:
+            if factor.name == "market_cap":
+                market_cap_score = max(market_cap_score, abs(factor.score))
+            elif factor.name == "sideways":
+                sideways_score = max(sideways_score, abs(factor.score))
+
+        if funding_rate >= 0.002 or oi_change >= 6.0:
+            return "chase"
+        if market_cap_score >= 70 and sideways_score >= 60:
+            return "ambush"
+        return "composite"
+
+    @classmethod
+    def resolve_primary_signal(cls, signals: list[Signal]) -> tuple[Signal, list[Signal], str]:
+        """Resolve the single primary signal among competing presets."""
+
+        if len(signals) == 1:
+            primary = signals[0]
+            return primary, [], getattr(primary, "opportunity_type", "") or (primary.preset or "composite")
+
+        priority = {"chase": 0, "ambush": 1, "composite": 2}
+        ordered = sorted(
+            signals,
+            key=lambda sig: (
+                priority.get(getattr(sig, "opportunity_type", "") or "", 99),
+                -abs(getattr(sig, "score", 0.0)),
+                sig.preset,
+            ),
+        )
+        primary = ordered[0]
+        support = ordered[1:]
+        return primary, support, getattr(primary, "opportunity_type", "") or (primary.preset or "composite")
 
     # ----------------------------------------------------------------
     # Scanning Pipeline (Scanner → CandidatePool → Scoring)
@@ -418,6 +460,235 @@ class StrategyEngine:
         )
 
         return scanner, pool, scoring, scan_task, score_task
+
+    async def start_multi_scanning_pipeline(
+        self,
+        cache,
+        order_executor,
+        preset_definitions: dict[str, dict],
+        notifier=None,
+        market_cap_fetcher=None,
+        rest_data=None,
+        special_signals: dict | None = None,
+        scan_interval: float = 5.0,
+        top_k: int = 3,
+        max_signals_per_cycle: int = 1,
+        min_confidence: float = 0.5,
+        event_repo=None,
+    ) -> tuple:
+        """Start one scanner and evaluate all enabled presets in parallel."""
+
+        from cryptopilot.market.types import StreamMessage
+        from cryptopilot.persistence.models import StrategyEvent
+        from cryptopilot.strategy.base import Signal as BaseSignal
+        from cryptopilot.strategy.candidate import CandidatePool
+        from cryptopilot.strategy.scanner import MarketScanner
+        from cryptopilot.strategy.scoring import FACTOR_CN, ScoringEngine
+
+        pool = CandidatePool(max_size=20, ttl_seconds=scan_interval * 2)
+        scanner = MarketScanner(
+            cache=cache,
+            candidate_pool=pool,
+            scan_interval=scan_interval,
+            min_change_pct=1.5,
+            volume_mult=1.8,
+            oi_change_threshold=3.0,
+            min_score=25.0,
+            max_symbols_to_scan=50,
+            rest_data=rest_data,
+        )
+
+        preset_runtime: dict[str, dict] = {}
+        for preset_name, preset_cfg in preset_definitions.items():
+            scoring = ScoringEngine(
+                cache=cache,
+                buy_threshold=float(preset_cfg.get("buy_threshold", 50.0)),
+                sell_threshold=float(preset_cfg.get("sell_threshold", -50.0)),
+                min_confidence=min_confidence,
+            )
+            factor_configs = list(preset_cfg.get("factors", []) or [])
+            if factor_configs:
+                scoring.configure(factor_configs)
+            if market_cap_fetcher:
+                for factor in scoring._factors:
+                    if factor.name == "market_cap" and hasattr(factor, "set_fetcher"):
+                        factor.set_fetcher(market_cap_fetcher)
+            preset_runtime[preset_name] = {"config": preset_cfg, "scoring": scoring}
+            logger.info(
+                f"多策略评分已加载 {preset_name}: "
+                f"{preset_cfg.get('buy_threshold', 50.0)}/{preset_cfg.get('sell_threshold', -50.0)} "
+                f"因子={scoring.factor_names()}"
+            )
+
+        sig_cfg = dict(special_signals or {})
+        signal_tracker: dict[str, set[str]] = defaultdict(set)
+        prev_funding: dict[str, float] = {}
+
+        async def scoring_loop():
+            heartbeat = 0
+            while True:
+                await asyncio.sleep(30)
+                heartbeat += 1
+                try:
+                    top = await pool.pop_top(top_k)
+                    if heartbeat % 12 == 0:
+                        logger.info(
+                            f"多策略评分心跳: 候选池={pool.size}个 评估={len(top)}个 "
+                            f"策略={list(preset_runtime.keys())}"
+                        )
+
+                    primary_signals: list[Signal] = []
+                    for cand in top:
+                        if self._position_manager.get_position(cand.symbol):
+                            continue
+
+                        need_klines_rest = not cache.get_klines(cand.symbol, "1m", limit=50)
+                        if rest_data:
+                            try:
+                                if need_klines_rest:
+                                    klines = await rest_data.fetch_klines(cand.symbol, "1m", limit=50)
+                                    klines_5m = await rest_data.fetch_klines(cand.symbol, "5m", limit=50)
+                                    for k in klines:
+                                        await cache.update(StreamMessage(stream="rest", data=k))
+                                    for k in klines_5m:
+                                        k.interval = "5m"
+                                        await cache.update(StreamMessage(stream="rest", data=k))
+                                if not cache.get_klines(cand.symbol, "4h", limit=200):
+                                    klines_4h = await rest_data.fetch_klines(cand.symbol, "4h", limit=200)
+                                    for k in klines_4h:
+                                        k.interval = "4h"
+                                        await cache.update(StreamMessage(stream="rest", data=k))
+                                oi_change = await rest_data.calc_oi_change_pct(cand.symbol, 60)
+                                mp = await rest_data.fetch_mark_price(cand.symbol)
+                                if mp:
+                                    await cache.update(StreamMessage(stream="rest", data=mp))
+                                if oi_change != 0:
+                                    cand.oi_change_pct = oi_change
+                                if mp:
+                                    cand.funding_rate = mp.funding_rate
+                                    cand.mark_price = mp.mark_price
+                            except Exception:
+                                logger.debug(f"REST 预取失败 {cand.symbol}")
+
+                        dark_flow = False
+                        if sig_cfg.get("dark_flow") and abs(cand.change_24h_pct) < 1.0 and cand.oi_change_pct > 3.0:
+                            dark_flow = True
+
+                        if sig_cfg.get("funding_deterioration"):
+                            prev = prev_funding.get(cand.symbol)
+                            if prev is not None and cand.funding_rate < prev and cand.funding_rate < 0:
+                                logger.warning(
+                                    f"费率恶化: {cand.symbol} {prev*100:.4f}% -> {cand.funding_rate*100:.4f}%"
+                                )
+                        prev_funding[cand.symbol] = cand.funding_rate
+
+                        cand.strategy_scores = {}
+                        cand.preset_scores = {}
+                        competing: list[Signal] = []
+                        for preset_name, runtime in preset_runtime.items():
+                            scoring = runtime["scoring"]
+                            result = scoring.score(cand)
+                            cand.strategy_scores[preset_name] = {
+                                "direction": result.direction,
+                                "confidence": result.confidence,
+                                "score": result.total_score,
+                                "detail": result.detail,
+                            }
+                            cand.preset_scores[preset_name] = result.total_score
+                            if result.direction == "HOLD" or result.confidence < min_confidence:
+                                continue
+
+                            top3 = sorted(result.factors, key=lambda f: abs(f.score), reverse=True)[:3]
+                            signal = BaseSignal(
+                                strategy_id=f"{preset_name}_{cand.symbol}",
+                                symbol=result.symbol,
+                                action=f"OPEN_{result.direction}",
+                                order_type="MARKET",
+                                price=cand.current_price,
+                                stop_loss_pct=5.0,
+                                take_profit_pct=6.0,
+                                comment=result.detail,
+                                score=result.total_score,
+                                top_factors=[(f.name, f.direction, f.score) for f in top3],
+                                preset=preset_name,
+                            )
+                            signal.factor_labels_cn = [FACTOR_CN.get(f.name, f.name) for f in top3]
+                            signal.opportunity_type = self.classify_opportunity(cand, result)
+                            signal.score_abs = abs(result.total_score) * (1.2 if dark_flow else 1.0)
+                            signal.supporting_presets = []
+                            signal.rejection_reason = ""
+                            competing.append(signal)
+
+                        if not competing:
+                            continue
+
+                        primary, support, opportunity = self.resolve_primary_signal(competing)
+                        primary.supporting_presets = [sig.preset for sig in support]
+                        primary.opportunity_type = opportunity
+                        if support:
+                            primary.rejection_reason = f"竞选落败: {', '.join(primary.supporting_presets)}"
+                            signal_tracker[cand.symbol].update(sig.preset for sig in competing)
+
+                        if event_repo is not None:
+                            for rejected in support:
+                                await event_repo.create(StrategyEvent(
+                                    strategy_id=rejected.strategy_id,
+                                    event_type="signal_rejected",
+                                    symbol=rejected.symbol,
+                                    details=(
+                                        '{"reason":"primary_strategy_conflict","winner":"'
+                                        + primary.strategy_id
+                                        + '","preset":"'
+                                        + rejected.preset
+                                        + '"}'
+                                    ),
+                                ))
+
+                        primary_signals.append(primary)
+                        try:
+                            from cryptopilot.web.health import add_signal_log
+
+                            add_signal_log({
+                                "time": __import__("datetime").datetime.now(
+                                    __import__("datetime").timezone.utc
+                                ).isoformat(),
+                                "symbol": primary.symbol,
+                                "action": primary.action,
+                                "score": round(primary.score_abs, 1),
+                                "detail": primary.comment,
+                                "preset": primary.preset,
+                                "strategy_id": primary.strategy_id,
+                                "supporting_presets": primary.supporting_presets,
+                                "opportunity_type": primary.opportunity_type,
+                                "factor_labels_cn": getattr(primary, "factor_labels_cn", []),
+                            })
+                        except Exception:
+                            pass
+
+                    if not primary_signals:
+                        continue
+
+                    produced = 0
+                    for signal in sorted(primary_signals, key=lambda sig: (-sig.score_abs, sig.symbol)):
+                        if produced >= max_signals_per_cycle:
+                            break
+                        await self._signal_queue.put(signal)
+                        produced += 1
+                        logger.info(
+                            f"多策略信号: {signal.symbol} {signal.action} "
+                            f"preset={signal.preset} score={signal.score:.1f} support={signal.supporting_presets}"
+                        )
+                except Exception:
+                    logger.exception("多策略评分循环异常")
+
+        scan_task = asyncio.create_task(scanner.start(), name="market_scanner")
+        score_task = asyncio.create_task(scoring_loop(), name="multi_scoring_loop")
+        scoring_engines = {name: runtime["scoring"] for name, runtime in preset_runtime.items()}
+        logger.info(
+            f"多策略扫描已启动: preset={list(preset_runtime.keys())}, "
+            f"间隔={scan_interval}s, TopK={top_k}, 每轮最多{max_signals_per_cycle}个"
+        )
+        return scanner, pool, scoring_engines, scan_task, score_task
 
     # ----------------------------------------------------------------
     # Status

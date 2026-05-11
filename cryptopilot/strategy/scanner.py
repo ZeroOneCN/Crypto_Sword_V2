@@ -26,6 +26,8 @@ class Candidate:
     direction: str = field(compare=False, default="HOLD")
     confidence: float = field(compare=False, default=0.0)
     composite_score: float = field(compare=False, default=0.0)
+    preset_scores: dict[str, float] = field(compare=False, default_factory=dict)
+    strategy_scores: dict[str, dict] = field(compare=False, default_factory=dict)
     scrape_reasons: list[str] = field(compare=False, default_factory=list)
     scraped_at: float = field(compare=False, default_factory=time.time)
 

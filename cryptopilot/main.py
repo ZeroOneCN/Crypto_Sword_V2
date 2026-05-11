@@ -580,51 +580,71 @@ async def main() -> None:
     scanner_obj = None
     candidate_pool = None
     scoring_engine = None
+    enabled_presets: dict[str, dict] = {}
     scan_task = None
     score_task = None
 
     # 从 config.yaml 读取评分配置 (支持预设)
     scoring_cfg = raw_cfg.get("scoring", {})
 
-    # 解析预设: active_preset → presets.xxx.factors
     active_preset = scoring_cfg.get("active_preset", "composite")
     presets = scoring_cfg.get("presets", {})
-    preset_cfg = presets.get(active_preset, {})
-    factor_configs = preset_cfg.get("factors", scoring_cfg.get("factors", []))
-    buy_threshold = preset_cfg.get("buy_threshold", scoring_cfg.get("buy_threshold", 50))
-    sell_threshold = preset_cfg.get("sell_threshold", scoring_cfg.get("sell_threshold", -50))
     min_confidence = scoring_cfg.get("min_confidence", 0.5)
-    special_signals = scoring_cfg.get("special_signals", {})
-    special_signals["_preset_name"] = active_preset
+    top_k_per_preset = int(scoring_cfg.get("top_k_per_preset", 3) or 3)
+    max_signals_per_cycle = int(scoring_cfg.get("max_signals_per_cycle", 1) or 1)
+    special_signals = dict(scoring_cfg.get("special_signals", {}) or {})
 
-    logger.info(f"当前策略预设: {active_preset} (阈值={buy_threshold}/{sell_threshold})")
+    enabled_presets = {
+        preset_name: preset_cfg
+        for preset_name, preset_cfg in presets.items()
+        if preset_cfg.get("enabled", True) and preset_cfg.get("factors")
+    }
 
-    if factor_configs:
+    if not enabled_presets and active_preset in presets:
+        fallback_cfg = dict(presets.get(active_preset, {}) or {})
+        if fallback_cfg.get("factors"):
+            enabled_presets = {active_preset: fallback_cfg}
+
+    logger.info(
+        f"启用策略预设: {list(enabled_presets.keys()) or [active_preset]} "
+        f"(候选TopK={top_k_per_preset}, 每轮最多信号={max_signals_per_cycle})"
+    )
+
+    if enabled_presets:
         scanner_obj, candidate_pool, scoring_engine, scan_task, score_task = (
-            await strategy_engine.start_scanning_pipeline(
+            await strategy_engine.start_multi_scanning_pipeline(
                 cache=data_cache,
                 order_executor=order_executor,
-                factor_configs=factor_configs,
+                preset_definitions=enabled_presets,
                 notifier=None,
                 market_cap_fetcher=mcap_fetcher,
                 rest_data=rest_data,
                 special_signals=special_signals,
-                scan_interval=300.0,  # 对齐V1深度扫描间隔,避免REST限流
-                top_k=3,
-                max_signals_per_cycle=1,  # 每轮仅最强信号
-                buy_threshold=buy_threshold,
-                sell_threshold=sell_threshold,
+                scan_interval=300.0,
+                top_k=top_k_per_preset,
+                max_signals_per_cycle=max_signals_per_cycle,
                 min_confidence=min_confidence,
+                event_repo=event_repo,
             )
         )
     else:
-        logger.warning("未配置评分因子, 扫描链路未启动")
+        logger.warning("未配置启用的评分预设, 扫描链路未启动")
 
     # ---- Notification ----
     from cryptopilot.notification.notifier import Notifier, Events, EventData
     from cryptopilot.notification.telegram_bot import TelegramBot
 
     notifier = Notifier()
+    preset_runtime_map = {
+        preset_name: {
+            "risk_budget": float(preset_cfg.get("risk_budget", 0.0) or 0.0),
+            "max_concurrent": int(preset_cfg.get("max_concurrent", 1) or 1),
+            "exit_template": preset_cfg.get("exit_template", preset_name),
+            "buy_threshold": preset_cfg.get("buy_threshold"),
+            "sell_threshold": preset_cfg.get("sell_threshold"),
+        }
+        for preset_name, preset_cfg in enabled_presets.items()
+    }
 
     telegram = TelegramBot(
         token=env.telegram_bot_token,
@@ -750,6 +770,7 @@ async def main() -> None:
         sc = cfg.scoring
         risk_cfg = cfg.risk
         preset = raw_cfg.get("scoring", {}).get("active_preset", "composite")
+        enabled_preset_labels = ", ".join(enabled_presets.keys()) if enabled_presets else preset
         lev = risk_cfg.default_leverage
         risk_pct = risk_cfg.risk_per_trade
         max_pos = risk_cfg.max_positions
@@ -834,13 +855,31 @@ async def main() -> None:
                         )
                         continue
 
+                    # 3. 每策略最大并发数检查，第二阶段先使用 entry_reason 作为持仓回溯标记
+                    preset_name = signal.preset or signal.strategy_id.split("_", 1)[0]
+                    preset_runtime = preset_runtime_map.get(preset_name, {})
+                    max_concurrent = int(preset_runtime.get("max_concurrent", 0) or 0)
+                    if max_concurrent > 0:
+                        same_preset_positions = 0
+                        for pos in position_manager.get_all_positions():
+                            entry_reason = str(pos.get("entry_reason", "") or "")
+                            if entry_reason.startswith(f"preset:{preset_name}|"):
+                                same_preset_positions += 1
+                        if same_preset_positions >= max_concurrent:
+                            logger.warning(
+                                f"信号被拒绝 — {preset_name} 已达最大并发数 "
+                                f"({same_preset_positions}/{max_concurrent}): {signal.symbol} {signal.action}"
+                            )
+                            continue
+
                 # Look up strategy-specific risk config
-                strat_risk = {}
-                for sc in cfg.strategies:
-                    sid = f"{sc.name}_{sc.symbol}"
-                    if signal.strategy_id.startswith(sid):
-                        strat_risk = sc.risk
-                        break
+                preset_name = signal.preset or signal.strategy_id.split("_", 1)[0]
+                preset_runtime = preset_runtime_map.get(preset_name, {})
+                strat_risk = {
+                    "risk_budget": preset_runtime.get("risk_budget", 0.0),
+                    "max_concurrent": preset_runtime.get("max_concurrent", 1),
+                    "exit_template": preset_runtime.get("exit_template", preset_name),
+                }
 
                 # Execute signal
                 await _execute_signal(
@@ -930,6 +969,7 @@ async def main() -> None:
         order_executor=order_executor,
         scanner=scanner_obj,
         preset_name=active_preset,
+        preset_configs=preset_runtime_map,
         signal_queue=signal_queue,
         cache=data_cache,
     )
@@ -1362,7 +1402,9 @@ async def _execute_signal(
 
         # 🆕 V2 多因子开仓通知
         factor_labels = [f"{name}" for name, direction, s in (signal.top_factors or [])]
-        entry_reason = ",".join(label for label in factor_labels[:3]) if factor_labels else "SCORE_TRIGGER"
+        factor_reason = ",".join(label for label in factor_labels[:3]) if factor_labels else "SCORE_TRIGGER"
+        preset_name = signal.preset or signal.strategy_id.split("_", 1)[0]
+        entry_reason = f"preset:{preset_name}|{factor_reason}"
         notifier.position_opened(
             symbol=signal.symbol,
             side=pos_side,
