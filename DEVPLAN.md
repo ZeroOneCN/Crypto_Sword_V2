@@ -65,25 +65,25 @@
 
 ## 阶段三：持仓、订单、事件统一补齐策略归因
 
-- [ ] 为 `cryptopilot/persistence/models.py` 中 `positions` 增加明确策略归因字段。
-- [ ] 更新相关 repository 与持仓同步逻辑，确保持仓记录稳定写入策略归因。
-- [ ] 保留现有 `entry_reason` / `exit_reason` 字段，不再只依赖它们间接推断策略来源。
-- [ ] 确保开仓后同步持仓时把 `strategy_id` 写入持仓记录。
-- [ ] 确保平仓时优先从持仓记录继承策略归因，而不是只依赖 close signal comment。
-- [ ] 统一记录以下策略事件：
+- [x] 为 `cryptopilot/persistence/models.py` 中 `positions` 增加明确策略归因字段。
+- [x] 更新相关 repository 与持仓同步逻辑，确保持仓记录稳定写入策略归因。
+- [x] 保留现有 `entry_reason` / `exit_reason` 字段，不再只依赖它们间接推断策略来源。
+- [x] 确保开仓后同步持仓时把 `strategy_id` 写入持仓记录。
+- [x] 确保平仓时优先从持仓记录继承策略归因，而不是只依赖 close signal comment。
+- [x] 统一记录以下策略事件：
   - 开仓成功
   - 保护单挂出
   - 部分止盈
   - 移动止损
   - 超时退出
   - 信号被拒绝
-- [ ] 写清历史数据回落规则：
+- [x] 写清历史数据回落规则：
   - 历史持仓 / 历史已平仓若无策略字段，先回落到 `entry_reason`
   - 若 `entry_reason` 不足，再回落到 `orders.strategy_name`
-- [ ] 保证回落逻辑写入实现与本文档，避免后续归因歧义。
+- [x] 保证回落逻辑写入实现与本文档，避免后续归因歧义。
 
-完成说明：待完成。
-验证结果：待完成后补充。
+完成说明：已为 `positions` 增加 `strategy_id` / `strategy_preset` / `support_presets`，并在同步、开仓、平仓、health 接口、事件记录中统一贯通；历史数据已按 `entry_reason -> orders.strategy_name` 回落。
+验证结果：已执行 `python -m compileall -q cryptopilot preview_dashboard.py`；`/health/positions` 与 `/health/trades` 已暴露策略归因字段，平仓前会先缓存并继承持仓策略上下文。
 
 ## 阶段四：分策略风控与退出模板落地
 

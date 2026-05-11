@@ -844,6 +844,15 @@ async def main() -> None:
                             f"信号被拒绝 — 已达最大持仓数 ({pos_count}/{max_pos}): "
                             f"{signal.symbol} {signal.action}"
                         )
+                        if event_repo is not None:
+                            from cryptopilot.persistence.models import StrategyEvent
+
+                            await event_repo.create(StrategyEvent(
+                                strategy_id=signal.strategy_id,
+                                event_type="signal_rejected",
+                                symbol=signal.symbol,
+                                details='{"reason":"max_positions"}',
+                            ))
                         continue
 
                     # 2. 同币种重复开仓检查
@@ -853,6 +862,15 @@ async def main() -> None:
                             f"信号跳过 — {signal.symbol} 已有持仓 "
                             f"({existing.get('side', '')} {existing.get('qty', 0)})"
                         )
+                        if event_repo is not None:
+                            from cryptopilot.persistence.models import StrategyEvent
+
+                            await event_repo.create(StrategyEvent(
+                                strategy_id=signal.strategy_id,
+                                event_type="signal_rejected",
+                                symbol=signal.symbol,
+                                details='{"reason":"existing_position"}',
+                            ))
                         continue
 
                     # 3. 每策略最大并发数检查，第二阶段先使用 entry_reason 作为持仓回溯标记
@@ -870,6 +888,15 @@ async def main() -> None:
                                 f"信号被拒绝 — {preset_name} 已达最大并发数 "
                                 f"({same_preset_positions}/{max_concurrent}): {signal.symbol} {signal.action}"
                             )
+                            if event_repo is not None:
+                                from cryptopilot.persistence.models import StrategyEvent
+
+                                await event_repo.create(StrategyEvent(
+                                    strategy_id=signal.strategy_id,
+                                    event_type="signal_rejected",
+                                    symbol=signal.symbol,
+                                    details='{"reason":"preset_max_concurrent"}',
+                                ))
                             continue
 
                 # Look up strategy-specific risk config
@@ -892,6 +919,7 @@ async def main() -> None:
                     notifier,
                     strat_risk.get("leverage", cfg.risk.default_leverage),
                     risk_config=strat_risk,
+                    event_repo=event_repo,
                 )
 
                 # Update trailing stops
@@ -1022,6 +1050,12 @@ async def main() -> None:
                             message=f"{sym} 止损已移至保本位 {entry:.4f}",
                             symbol=sym,
                         ))
+                        await event_repo.create(StrategyEvent(
+                            strategy_id=(position_manager.get_position_context(sym) or {}).get("strategy_id", sym),
+                            event_type="move_stop",
+                            symbol=sym,
+                            details='{"reason":"breakeven_after_profit_lock"}',
+                        ))
 
                     # Partial profit lock
                     if profit_locker.should_lock(sym, entry, mark, side):
@@ -1043,6 +1077,16 @@ async def main() -> None:
                         partial_signal.stop_loss = 0  # Don't set new SL/TP on close
                         partial_signal.take_profit = 0
                         await signal_queue.put(partial_signal)
+                        await event_repo.create(StrategyEvent(
+                            strategy_id=(position_manager.get_position_context(sym) or {}).get("strategy_id", "profit_locker"),
+                            event_type="partial_take_profit",
+                            symbol=sym,
+                            details=(
+                                '{"reason":"profit_lock","lock_fraction":"'
+                                + f"{profit_locker._lock_fraction:.2f}"
+                                + '"}'
+                            ),
+                        ))
                         logger.info(
                             f"锁利执行: {sym} 平仓 {lock_qty:.4f} "
                             f"({profit_locker._lock_fraction*100:.0f}%) 价格 {mark:.4f}"
@@ -1266,6 +1310,7 @@ async def _execute_signal(
     notifier,
     default_leverage: int,
     risk_config: dict | None = None,
+    event_repo=None,
 ) -> None:
     """Translate a Signal into exchange orders with risk checks.
 
@@ -1363,7 +1408,7 @@ async def _execute_signal(
         logger.exception("REST 下单失败, 信号丢弃")
         return
 
-    await order_manager.record_order(result, signal.strategy_id)
+    await order_manager.record_order(result, signal.strategy_id or (signal.preset or ""))
 
     # Confirm the actual fill price, especially for async market closes.
     position_before_close = position_manager.get_position(signal.symbol) if signal.action.startswith("CLOSE") else None
@@ -1405,6 +1450,24 @@ async def _execute_signal(
         factor_reason = ",".join(label for label in factor_labels[:3]) if factor_labels else "SCORE_TRIGGER"
         preset_name = signal.preset or signal.strategy_id.split("_", 1)[0]
         entry_reason = f"preset:{preset_name}|{factor_reason}"
+        support_presets = list(getattr(signal, "supporting_presets", []) or [])
+        if event_repo is not None:
+            from cryptopilot.persistence.models import StrategyEvent
+
+            await event_repo.create(StrategyEvent(
+                strategy_id=signal.strategy_id,
+                event_type="position_opened",
+                symbol=signal.symbol,
+                details=(
+                    '{"preset":"'
+                    + preset_name
+                    + '","support_presets":"'
+                    + ",".join(support_presets)
+                    + '","entry_reason":"'
+                    + entry_reason.replace('"', "'")
+                    + '"}'
+                ),
+            ))
         notifier.position_opened(
             symbol=signal.symbol,
             side=pos_side,
@@ -1525,6 +1588,21 @@ async def _execute_signal(
                     sl_pct=sl_pct_val,
                     tp_tiers=tp_placed,
                 )
+                if event_repo is not None:
+                    from cryptopilot.persistence.models import StrategyEvent
+
+                    await event_repo.create(StrategyEvent(
+                        strategy_id=signal.strategy_id,
+                        event_type="protection_placed",
+                        symbol=signal.symbol,
+                        details=(
+                            '{"sl_price":"'
+                            + f"{sl_price:.8f}"
+                            + '","tp_tiers":"'
+                            + ",".join(f"TP{item['tier']}" for item in tp_placed)
+                            + '"}'
+                        ),
+                    ))
             elif sl_price <= 0:
                 logger.warning(f"{signal.symbol} 止损价无效, SL={sl_price}")
             else:
@@ -1536,7 +1614,7 @@ async def _execute_signal(
         pnl = _calc_pnl(position_manager, signal.symbol, close_fill_price, qty)
 
         # 🆕 V2 平仓通知 — 带持仓时长和退出原因
-        pos = position_before_close or position_manager.get_position(signal.symbol)
+        pos = position_before_close or position_manager.get_position_context(signal.symbol)
         entry_px = pos.get("entry_price", 0) if pos else 0
         pnl_pct = ((close_fill_price - entry_px) / entry_px * 100) if entry_px > 0 else 0
         if pos_side == "SHORT":
@@ -1573,6 +1651,35 @@ async def _execute_signal(
 
         # Reuse the recorded entry reason when sending the close notification.
         pos_entry_reason = pos.get("entry_reason", "") if pos else ""
+        position_strategy_id = pos.get("strategy_id", "") if pos else ""
+        position_strategy_preset = pos.get("strategy_preset", "") if pos else ""
+
+        await position_manager.mark_closed(
+            signal.symbol,
+            side=pos.get("side", pos_side) if pos else pos_side,
+            exit_reason=exit_reason,
+            exit_price=close_fill_price,
+            exit_time=datetime.now(tz=timezone.utc).isoformat(),
+            pnl=pnl,
+            pnl_pct=pnl_pct,
+        )
+        if event_repo is not None:
+            from cryptopilot.persistence.models import StrategyEvent
+
+            await event_repo.create(StrategyEvent(
+                strategy_id=position_strategy_id or signal.strategy_id,
+                event_type="position_closed",
+                symbol=signal.symbol,
+                details=(
+                    '{"preset":"'
+                    + (position_strategy_preset or (signal.preset or ""))
+                    + '","exit_reason":"'
+                    + exit_reason
+                    + '","pnl":"'
+                    + f"{pnl:.8f}"
+                    + '"}'
+                ),
+            ))
 
         notifier.position_closed(
             symbol=signal.symbol,
@@ -1595,7 +1702,13 @@ async def _execute_signal(
     # Save entry_reason to DB (sync_from_exchange clears metadata on new positions)
     if signal.action.startswith("OPEN") and entry_reason:
         try:
-            await position_manager.set_entry_reason(signal.symbol, entry_reason)
+            await position_manager.set_strategy_context(
+                signal.symbol,
+                strategy_id=signal.strategy_id,
+                strategy_preset=signal.preset or signal.strategy_id.split("_", 1)[0],
+                support_presets=list(getattr(signal, "supporting_presets", []) or []),
+                entry_reason=entry_reason,
+            )
         except Exception:
             pass
 

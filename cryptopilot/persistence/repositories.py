@@ -160,6 +160,7 @@ class PositionRepository:
                    highest_price=?, lowest_price=?, current_stop=?,
                    sideways_defense_moved=?, sideways_start_ts=?,
                    initial_qty=?, take_profit_price=?, stop_loss_price=?,
+                   strategy_id=?, strategy_preset=?, support_presets=?,
                    entry_reason=?, exit_reason=?, exit_price=?, exit_time=?, pnl=?, pnl_pct=?,
                    updated_at=?
                    WHERE symbol=? AND side=?""",
@@ -169,6 +170,7 @@ class PositionRepository:
                  pos.highest_price, pos.lowest_price, pos.current_stop,
                  pos.sideways_defense_moved, pos.sideways_start_ts,
                  pos.initial_qty, pos.take_profit_price, pos.stop_loss_price,
+                 pos.strategy_id, pos.strategy_preset, pos.support_presets,
                  pos.entry_reason, pos.exit_reason, pos.exit_price, pos.exit_time, pos.pnl, pos.pnl_pct,
                  now, pos.symbol, pos.side),
             )
@@ -182,9 +184,10 @@ class PositionRepository:
                    highest_price, lowest_price, current_stop,
                    sideways_defense_moved, sideways_start_ts,
                    initial_qty, take_profit_price, stop_loss_price,
+                   strategy_id, strategy_preset, support_presets,
                    entry_reason, exit_reason, exit_price, exit_time, pnl, pnl_pct,
                    created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (pos.symbol, pos.side, pos.qty, pos.entry_price,
                  pos.mark_price, pos.leverage, pos.liquidation_price,
                  pos.unrealized_pnl,
@@ -192,6 +195,7 @@ class PositionRepository:
                  pos.highest_price, pos.lowest_price, pos.current_stop,
                  pos.sideways_defense_moved, pos.sideways_start_ts,
                  pos.initial_qty, pos.take_profit_price, pos.stop_loss_price,
+                 pos.strategy_id, pos.strategy_preset, pos.support_presets,
                  pos.entry_reason, pos.exit_reason, pos.exit_price, pos.exit_time, pos.pnl, pos.pnl_pct,
                  pos.created_at, pos.updated_at),
             )
@@ -209,6 +213,27 @@ class PositionRepository:
         return await self._db.fetch_one(
             "SELECT * FROM positions WHERE symbol = ?",
             (symbol,),
+        )
+
+    async def mark_closed(
+        self,
+        symbol: str,
+        side: str,
+        *,
+        exit_reason: str = "",
+        exit_price: float = 0.0,
+        exit_time: str = "",
+        pnl: float = 0.0,
+        pnl_pct: float = 0.0,
+    ) -> None:
+        """Persist final position metadata before the row is removed from the live table."""
+
+        now = iso_now()
+        await self._db.execute(
+            """UPDATE positions
+               SET exit_reason = ?, exit_price = ?, exit_time = ?, pnl = ?, pnl_pct = ?, updated_at = ?
+               WHERE symbol = ? AND side = ?""",
+            (exit_reason, exit_price, exit_time, pnl, pnl_pct, now, symbol, side),
         )
 
 

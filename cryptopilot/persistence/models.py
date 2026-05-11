@@ -63,6 +63,9 @@ CREATE_TABLES = [
         initial_qty REAL DEFAULT 0,           -- original position quantity (before TP fills)
         take_profit_price REAL DEFAULT 0,     -- original take-profit price (highest tier)
         stop_loss_price REAL DEFAULT 0,       -- original stop-loss price
+        strategy_id TEXT DEFAULT '',          -- stable strategy attribution for the position
+        strategy_preset TEXT DEFAULT '',      -- preset name (ambush/chase/composite)
+        support_presets TEXT DEFAULT '',      -- comma-separated supporting presets
         entry_reason TEXT DEFAULT '',          -- reason for entry (set on open)
         exit_reason TEXT DEFAULT '',          -- reason for exit (set on close)
         exit_price REAL DEFAULT 0,            -- avg exit price (set on close)
@@ -168,6 +171,9 @@ class PositionRecord:
     initial_qty: float = 0.0
     take_profit_price: float = 0.0
     stop_loss_price: float = 0.0
+    strategy_id: str = ""
+    strategy_preset: str = ""
+    support_presets: str = ""
     entry_reason: str = ""
     exit_reason: str = ""
     exit_price: float = 0.0

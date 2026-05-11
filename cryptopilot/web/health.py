@@ -342,6 +342,15 @@ def create_health_app(
         if position_manager is None:
             return {"error": "Position manager not available"}
         positions = position_manager.get_all_positions()
+        if position_manager is not None:
+            for pos in positions:
+                try:
+                    inferred = position_manager.infer_strategy_from_metadata(pos)
+                    pos["strategy_id"] = pos.get("strategy_id") or inferred.get("strategy_id", "")
+                    pos["strategy_preset"] = pos.get("strategy_preset") or inferred.get("strategy_preset", "")
+                    pos["support_presets"] = pos.get("support_presets") or inferred.get("support_presets", "")
+                except Exception:
+                    pass
 
         # 增强: 获取实时标记价、杠杆、保证金类型、强平价、名义价值
         try:
@@ -844,7 +853,7 @@ def create_health_app(
             return {"error": "数据库不可用"}
         try:
             rows = await db.fetch_all("""
-                SELECT o.symbol, o.side, o.type, o.pos_side,
+                SELECT o.symbol, o.side, o.type, o.pos_side, o.strategy_name,
                        f.price, f.qty, f.commission, f.commission_asset, f.filled_at
                 FROM fills f
                 JOIN orders o ON o.id = f.order_id
