@@ -89,9 +89,24 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   .hint{margin-top:6px;color:var(--dim);font-size:12px}
   .layout{
-    display:grid;grid-template-columns:minmax(0,1.4fr) minmax(420px,.95fr);gap:18px
+    display:grid;
+    grid-template-columns:minmax(0,1.45fr) minmax(360px,.9fr);
+    grid-template-areas:
+      "positions system"
+      "performance performance"
+      "signals trend"
+      "trades logs";
+    gap:18px;
+    align-items:start
   }
-  .stack{display:grid;gap:18px}
+  .stack{display:contents}
+  .layout > .stack:first-child > section:nth-child(1){grid-area:positions}
+  .layout > .stack:first-child > section:nth-child(2){grid-area:performance}
+  .layout > .stack:first-child > section:nth-child(3){grid-area:signals}
+  .layout > .stack:first-child > section:nth-child(4){grid-area:trades}
+  .layout > .stack:last-child > section:nth-child(1){grid-area:system}
+  .layout > .stack:last-child > section:nth-child(2){grid-area:trend}
+  .layout > .stack:last-child > section:nth-child(3){grid-area:logs}
   .panel{
     border-radius:var(--radius-lg);padding:20px 20px 18px;
     box-shadow:var(--shadow)
@@ -183,7 +198,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   button:hover{transform:translateY(-1px);opacity:.96}
   .empty{padding:18px;color:var(--muted);text-align:center}
   @media(max-width:1280px){
-    .layout{grid-template-columns:1fr}
+    .layout{
+      grid-template-columns:1fr;
+      grid-template-areas:
+        "positions"
+        "system"
+        "performance"
+        "trend"
+        "signals"
+        "trades"
+        "logs";
+    }
     .hero-inner{grid-template-columns:1fr}
     .metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   }
