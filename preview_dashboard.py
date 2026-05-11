@@ -60,7 +60,7 @@ def _mock_strategy():
 
 def _mock_candidates():
     cands = []
-    for i, sym in enumerate(_MOCK_SYMBOLS[:15]):
+    for i, sym in enumerate(_MOCK_SYMBOLS[:10]):
         change = round(random.uniform(-8, 15), 2)
         direction = "LONG" if change > 0 else "HOLD"
         conf = round(random.uniform(0.3, 1.0), 2) if direction == "LONG" else 0
@@ -90,7 +90,7 @@ def _mock_signals():
 
 def _mock_trades():
     trades = []
-    for i in range(15):
+    for i in range(10):
         side = random.choice(["BUY", "SELL"])
         trades.append({
             "filled_at": (datetime.now(tz=timezone.utc) - timedelta(minutes=i*20)).isoformat(),
@@ -102,7 +102,7 @@ def _mock_trades():
             "strategy_name": random.choice(["ambush", "chase", "composite"]),
             "type": "MARKET",
         })
-    return {"trades": trades, "total": 45}
+    return {"trades": trades, "total": 10}
 
 def _mock_orders():
     return {
@@ -145,7 +145,7 @@ def _mock_margin():
 def _mock_logs():
     now = datetime.now(tz=timezone.utc)
     lines = []
-    for i in range(40):
+    for i in range(20):
         t = (now - timedelta(seconds=i*5)).strftime("%H:%M:%S")
         level = random.choices(["INFO", "INFO", "INFO", "WARNING", "DEBUG"], weights=[5,5,3,1,2])[0]
         msgs = {
@@ -236,5 +236,5 @@ async def health_logs():
 if __name__ == "__main__":
     import uvicorn
     print("🚀 仪表盘预览模式启动: http://localhost:1689")
-    print("   模拟数据: 3 个持仓 / 15 笔成交 / 6 个候选 / 40 条日志")
+    print("   模拟数据: 3 个持仓 / 5 笔成交 / 10 个候选 / 20 条日志")
     uvicorn.run(app, host="0.0.0.0", port=1689, log_level="warning")

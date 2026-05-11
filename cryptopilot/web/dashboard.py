@@ -76,11 +76,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     transition:border-color .2s;
   }
   .card:hover{border-color:var(--hairline)}
+  main > section + section {
+    margin-top: var(--spacing-xxl);
+    padding-top: var(--spacing-lg);
+    border-top: 1px solid var(--hairline);
+  }
+  main > section:first-child { margin-top: 0; padding-top: 0; border-top: none; }
   .panel{
     background:var(--surface);border:1px solid var(--hairline-soft);
-    border-radius:var(--radius-lg);padding:var(--spacing-lg);margin-top:var(--spacing-md);
+    border-radius:var(--radius-lg);padding:var(--spacing-lg);
   }
-  .panel:first-child{margin-top:0}
+  .grid .panel{height:100%}
   .label{color:var(--ink-muted);font-size:12px;font-weight:600;letter-spacing:0;text-transform:uppercase}
   .value{
     font-family:"SF Mono","SF Pro Display",monospace;
@@ -211,7 +217,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <!-- Candidate Pool (15 items) + Recent Trades -->
   <section class="grid two">
     <div class="panel">
-      <div class="panel-head"><h2>候选池</h2><span class="pill muted">Top-15</span></div>
+      <div class="panel-head"><h2>候选池</h2><span class="pill muted">Top-10</span></div>
       <div class="scroll"><table>
         <thead><tr><th>币种</th><th>价格</th><th>涨跌</th><th>扫描</th><th>综合</th><th>方向</th><th>置信</th></tr></thead>
         <tbody id="scoring_body"></tbody>
@@ -349,7 +355,7 @@ async function loadAll(){
 
     if(!sigD.error&&sigD.signals&&sigD.signals.length>0){
       let html='';
-      sigD.signals.slice().reverse().slice(0,25).forEach(s=>{
+      sigD.signals.slice().reverse().slice(0,5).forEach(s=>{
         const act=s.action||'';let actCls='badge-teal';
         if(act.includes('LONG'))actCls='badge-long';else if(act.includes('SHORT'))actCls='badge-short';
         html+='<tr><td class="nowrap">'+(s.time?new Date(s.time).toLocaleTimeString():'-')+'</td>'+
@@ -365,7 +371,7 @@ async function loadAll(){
     const candBody=document.getElementById('scoring_body');
     if(!candD.error&&candD.candidates&&candD.candidates.length>0){
       let html='';
-      candD.candidates.slice(0,15).forEach(c=>{
+      candD.candidates.slice(0,10).forEach(c=>{
         const changeCls=parseFloat(c.change_24h)>=0?'good':'bad';
         let dirBadge='<span class="badge badge-teal">HOLD</span>';
         if(c.direction==='LONG')dirBadge='<span class="badge badge-long">LONG</span>';
@@ -384,7 +390,7 @@ async function loadAll(){
     const tradeBody=document.getElementById('trade_body');
     if(!tradeD.error&&tradeD.trades&&tradeD.trades.length>0){
       let html='';
-      tradeD.trades.slice(0,30).forEach(t=>{
+      tradeD.trades.slice(0,10).forEach(t=>{
         const side=(t.side||'').toUpperCase();const sideCls=side==='BUY'?'badge-long':'badge-short';
         html+='<tr><td class="nowrap">'+(t.filled_at?new Date(t.filled_at).toLocaleTimeString():'-')+'</td>'+
           '<td><b>'+esc(t.symbol)+'</b></td>'+
