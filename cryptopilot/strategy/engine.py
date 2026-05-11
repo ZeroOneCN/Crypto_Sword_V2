@@ -288,6 +288,10 @@ class StrategyEngine:
                                 logger.debug(f"REST 预取失败 {cand.symbol}")
 
                         result = scoring.score(cand)
+                        # 将评分结果回写到候选对象，供 Health API / 前端展示
+                        cand.direction = result.direction
+                        cand.confidence = result.confidence
+                        cand.composite_score = result.total_score
                         sym = cand.symbol
 
                         # ---- 特殊信号检测 ----

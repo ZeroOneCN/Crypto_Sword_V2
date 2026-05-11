@@ -1,27 +1,48 @@
-"""Telegram Bot — V2 宙斯交易中枢风格推送 (向V1看齐)."""
+"""Telegram Bot — V2 宙斯交易中枢风格推送 (raw httpx, no PTB dependency).
+
+Uses direct httpx.AsyncClient calls to the Telegram Bot API for:
+- sendMessage (all notifications)
+- getUpdates (command polling for /status, /positions, etc.)
+
+This completely avoids python-telegram-bot's complex initialization which
+hangs on slow networks (~10s per API call).
+"""
 
 from __future__ import annotations
 
+import asyncio
+import json
+from typing import Callable, Awaitable
+
+import httpx
 from loguru import logger
 
 from cryptopilot.notification.notifier import EventData, Events
 
 SEP = "━━━━━━━━━━━━━━━━━━━━"
 
+# ── Telegram Bot API base URL ──────────────────────────────────────
+API_BASE = "https://api.telegram.org"
+
+# ── Timeouts: generous enough for slow networks, bounded to avoid hangs ──
+REQUEST_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=5.0)
+POLL_TIMEOUT = 30  # long-poll timeout for getUpdates
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Formatting helpers (unchanged from V1/V2 style)
+# ═══════════════════════════════════════════════════════════════════
 
 def _fmt_pnl(pnl: float) -> str:
-    """格式化盈亏, 带正负号."""
     return f"${pnl:+.2f}"
 
 
 def _html_esc(s: str) -> str:
-    """HTML 转义."""
     return (str(s or "").replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
 def _hold_duration(seconds: float) -> str:
-    """秒 → 人类可读时长."""
     if seconds < 60:
         return f"{int(seconds)}秒"
     m, s = divmod(int(seconds), 60)
@@ -32,7 +53,6 @@ def _hold_duration(seconds: float) -> str:
 
 
 def _score_label(score: float) -> str:
-    """评分 → 置信度标签."""
     if score >= 90:
         return "王炸"
     elif score >= 75:
@@ -45,24 +65,21 @@ def _score_label(score: float) -> str:
 
 
 def _score_bar(score: float) -> str:
-    """评分可视化."""
     filled = min(int(score / 10), 10)
     return "█" * filled + "░" * (10 - filled)
 
 
 def _side_emoji(side: str) -> str:
-    """方向 → emoji."""
     s = (side or "").upper()
     return "📈 做多" if s == "LONG" else "📉 做空" if s == "SHORT" else "📊"
 
 
 def _margin_label(mt: str) -> str:
-    """保证金模式标签."""
     return "🔒 逐仓" if (mt or "").lower() == "isolated" else "🌐 全仓"
 
 
 class TelegramBot:
-    """V2 Telegram 机器人 — 宙斯交易中枢通知风格."""
+    """V2 Telegram 机器人 — raw httpx, no PTB dependency."""
 
     def __init__(
         self,
@@ -73,13 +90,19 @@ class TelegramBot:
         self._token = token
         self._chat_id = chat_id
         self._allowed_users = set(allowed_users or [])
-        self._app: object | None = None
         self._running = False
-        self._status_callback = None
-        self._pause_callback = None
-        self._resume_callback = None
-        self._close_all_callback = None
-        self._positions_callback = None
+        self._http: httpx.AsyncClient | None = None
+        self._poll_task: asyncio.Task | None = None
+        self._last_update_id: int = 0
+
+        # Callbacks
+        self._status_callback: Callable | None = None
+        self._pause_callback: Callable | None = None
+        self._resume_callback: Callable | None = None
+        self._close_all_callback: Callable | None = None
+        self._positions_callback: Callable | None = None
+
+    # ── Public API ─────────────────────────────────────────────────
 
     def set_callbacks(
         self,
@@ -96,136 +119,66 @@ class TelegramBot:
         self._positions_callback = positions_func
 
     async def start(self) -> None:
+        """Start the bot: create HTTP client, verify token, begin polling."""
         if not self._token or not self._chat_id:
             logger.info("Telegram 未启用 (缺少 token/chat_id)")
             return
+
+        self._http = httpx.AsyncClient(timeout=REQUEST_TIMEOUT)
+
         try:
-            import asyncio as _asyncio
-
-            from telegram import Update
-            from telegram.ext import Application, CommandHandler, ContextTypes
-            from telegram.request import HTTPXRequest
-
-            # Explicit timeouts to avoid hanging on slow connections
-            # Default PTB timeouts (connect=5, read=5) can cause 10s+ stalls
-            _request = HTTPXRequest(
-                connect_timeout=8.0,
-                read_timeout=8.0,
-                write_timeout=8.0,
-            )
-
-            app = (
-                Application.builder()
-                .token(self._token)
-                .request(_request)
-                .build()
-            )
-            self._app = app
-
-            async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-                if not self._check_user(update):
-                    return
-                if self._status_callback:
-                    r = self._status_callback()
-                    if hasattr(r, '__await__'):
-                        r = await r
-                    await update.message.reply_text(str(r))
-
-            async def positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-                if not self._check_user(update):
-                    return
-                if self._positions_callback:
-                    r = self._positions_callback()
-                    if hasattr(r, '__await__'):
-                        r = await r
-                    await update.message.reply_text(str(r))
-
-            async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-                if not self._check_user(update):
-                    return
-                if self._pause_callback:
-                    await self._pause_callback()
-                await update.message.reply_text("⏸️ 策略已暂停")
-
-            async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-                if not self._check_user(update):
-                    return
-                if self._resume_callback:
-                    await self._resume_callback()
-                await update.message.reply_text("▶️ 策略已恢复")
-
-            async def close_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-                if not self._check_user(update):
-                    return
-                if self._close_all_callback:
-                    await self._close_all_callback()
-                await update.message.reply_text("🚨 紧急平仓已执行")
-
-            async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-                await update.message.reply_text(
-                    "/status — 系统状态\n"
-                    "/positions — 持仓明细\n"
-                    "/pause — 暂停策略\n"
-                    "/resume — 恢复策略\n"
-                    "/close_all — 紧急平仓"
-                )
-
-            app.add_handler(CommandHandler("status", status))
-            app.add_handler(CommandHandler("positions", positions))
-            app.add_handler(CommandHandler("pause", pause))
-            app.add_handler(CommandHandler("resume", resume))
-            app.add_handler(CommandHandler("close_all", close_all))
-            app.add_handler(CommandHandler("help", help_cmd))
-
-            # Hard timeout for initialization — prevents hanging on network issues
-            _INIT_TIMEOUT = 20.0  # generous but bounded
-            try:
-                await _asyncio.wait_for(app.initialize(), timeout=_INIT_TIMEOUT)
-            except _asyncio.TimeoutError:
-                logger.error(
-                    f"Telegram 初始化超时 ({_INIT_TIMEOUT}s) — "
-                    "网络到 api.telegram.org 可能不可达"
-                )
-                self._app = None
+            # Verify the token works with a quick getMe
+            ok, result = await self._api_call("getMe")
+            if not ok:
+                logger.error(f"Telegram getMe 失败: {result}")
+                await self._http.aclose()
+                self._http = None
                 return
+            bot_name = result.get("first_name", "?")
+            logger.info(f"Telegram Bot 已验证: @{result.get('username', '?')} ({bot_name})")
+        except Exception as exc:
+            logger.error(f"Telegram getMe 异常: {exc}")
+            await self._http.aclose()
+            self._http = None
+            return
 
-            await app.start()
-            self._running = True
-            logger.info("Telegram Bot 已启动")
-
-        except ImportError:
-            logger.warning("python-telegram-bot 未安装 — Telegram 禁用")
-        except Exception:
-            logger.exception("Telegram Bot 启动失败")
-            self._app = None
-            self._running = False
+        # Start command polling in background
+        self._running = True
+        self._poll_task = asyncio.create_task(self._poll_loop(), name="tg_poll")
+        logger.info("Telegram Bot 已启动 (httpx 模式, 命令轮询中)")
 
     async def stop(self) -> None:
-        if self._app and self._running:
+        """Stop polling and close HTTP client."""
+        self._running = False
+        if self._poll_task and not self._poll_task.done():
+            self._poll_task.cancel()
             try:
-                await self._app.stop()
-                await self._app.shutdown()
-            except Exception:
+                await self._poll_task
+            except asyncio.CancelledError:
                 pass
-            self._running = False
+            self._poll_task = None
+        if self._http:
+            await self._http.aclose()
+            self._http = None
+        logger.info("Telegram Bot 已停止")
 
     async def send_message(self, text: str) -> None:
-        if not self._running or not self._app:
+        """Send an HTML-formatted message to the configured chat."""
+        if not self._running or not self._http:
             return
         try:
-            await self._app.bot.send_message(
-                chat_id=self._chat_id,
-                text=text[:4096],
-                parse_mode='HTML',
-            )
+            await self._api_call("sendMessage", {
+                "chat_id": self._chat_id,
+                "text": text[:4096],
+                "parse_mode": "HTML",
+            })
         except Exception:
             logger.warning(f"Telegram 发送失败: {text[:100]}")
 
     def on_event(self, data: EventData) -> None:
-        """处理 Notifier 事件 → 格式化 Telegram 消息."""
+        """Handle Notifier event → format and send Telegram message."""
         if not self._running:
             return
-        import asyncio
         try:
             loop = asyncio.get_running_loop()
             msg = self._format_event(data)
@@ -234,12 +187,151 @@ class TelegramBot:
         except RuntimeError:
             pass
 
-    # ================================================================
-    # 事件格式化 — V1 风格富文本
-    # ================================================================
+    # ── Internal: Telegram API ─────────────────────────────────────
+
+    async def _api_call(self, method: str, params: dict | None = None) -> tuple[bool, dict]:
+        """Make a call to the Telegram Bot API. Returns (ok, result_json).
+
+        Uses POST with form-encoded data (required by sendMessage and others).
+        For parameterless calls like getMe, sends empty data.
+        Also tries URL query params as fallback for GET-like methods.
+        """
+        if not self._http:
+            return False, {"error": "no http client"}
+        url = f"{API_BASE}/bot{self._token}/{method}"
+        try:
+            if params:
+                # sendMessage and most methods require form-encoded data
+                resp = await self._http.post(url, data=params)
+            else:
+                resp = await self._http.post(url)
+            data = resp.json()
+            return data.get("ok", False), data.get("result", data)
+        except httpx.TimeoutException:
+            logger.warning(f"Telegram API 超时: {method}")
+            return False, {"error": "timeout"}
+        except Exception as exc:
+            logger.warning(f"Telegram API 异常: {method} - {exc}")
+            return False, {"error": str(exc)}
+
+    # ── Internal: Command Polling ──────────────────────────────────
+
+    async def _poll_loop(self) -> None:
+        """Long-poll getUpdates for command handling."""
+        logger.debug("Telegram 命令轮询已启动")
+        consecutive_errors = 0
+
+        while self._running and self._http:
+            try:
+                params = {
+                    "timeout": POLL_TIMEOUT,
+                    "allowed_updates": ["message"],
+                }
+                if self._last_update_id > 0:
+                    params["offset"] = self._last_update_id + 1
+
+                ok, result = await self._api_call("getUpdates", params)
+                if not ok:
+                    consecutive_errors += 1
+                    if consecutive_errors > 5:
+                        logger.error("Telegram getUpdates 连续失败, 暂停轮询")
+                        break
+                    await asyncio.sleep(5)
+                    continue
+
+                consecutive_errors = 0
+                updates = result if isinstance(result, list) else []
+                for upd in updates:
+                    update_id = upd.get("update_id", 0)
+                    if update_id > self._last_update_id:
+                        self._last_update_id = update_id
+                    msg = upd.get("message") or upd.get("channel_post")
+                    if msg:
+                        await self._handle_message(msg)
+
+            except asyncio.CancelledError:
+                break
+            except httpx.TimeoutException:
+                # Long-poll timeout is expected — just loop
+                consecutive_errors = 0
+                continue
+            except Exception:
+                consecutive_errors += 1
+                logger.exception("Telegram 轮询异常")
+                await asyncio.sleep(min(consecutive_errors * 5, 60))
+
+    async def _handle_message(self, msg: dict) -> None:
+        """Parse and dispatch a command from a message."""
+        text = (msg.get("text") or msg.get("caption") or "").strip()
+        if not text.startswith("/"):
+            return  # Only handle commands
+
+        chat_id = str(msg.get("chat", {}).get("id", ""))
+        from_user = msg.get("from", {})
+        username = from_user.get("username", "")
+
+        # Access control
+        if self._allowed_users and username not in self._allowed_users:
+            await self._send_to(chat_id, "⛔ 无权限")
+            return
+
+        command = text.split()[0].lower().split("@")[0]  # strip @botname
+
+        if command == "/status" and self._status_callback:
+            await self._invoke_and_reply(chat_id, self._status_callback)
+        elif command == "/positions" and self._positions_callback:
+            await self._invoke_and_reply(chat_id, self._positions_callback)
+        elif command == "/pause" and self._pause_callback:
+            await self._invoke_coro(self._pause_callback)
+            await self._send_to(chat_id, "⏸️ 策略已暂停")
+        elif command == "/resume" and self._resume_callback:
+            await self._invoke_coro(self._resume_callback)
+            await self._send_to(chat_id, "▶️ 策略已恢复")
+        elif command == "/close_all" and self._close_all_callback:
+            await self._invoke_coro(self._close_all_callback)
+            await self._send_to(chat_id, "🚨 紧急平仓已执行")
+        elif command == "/help":
+            await self._send_to(chat_id, (
+                "/status — 系统状态\n"
+                "/positions — 持仓明细\n"
+                "/pause — 暂停策略\n"
+                "/resume — 恢复策略\n"
+                "/close_all — 紧急平仓"
+            ))
+
+    async def _send_to(self, chat_id: str, text: str) -> None:
+        """Send a message to a specific chat (for command replies)."""
+        if self._http:
+            await self._api_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": text[:4096],
+                "parse_mode": "HTML",
+            })
+
+    async def _invoke_and_reply(self, chat_id: str, func: Callable) -> None:
+        """Invoke a callback and send the result to chat_id."""
+        try:
+            result = func()
+            if hasattr(result, '__await__'):
+                result = await result
+            await self._send_to(chat_id, str(result))
+        except Exception as exc:
+            await self._send_to(chat_id, f"❌ 错误: {exc}")
+
+    async def _invoke_coro(self, func: Callable) -> None:
+        """Invoke a coroutine callback."""
+        try:
+            result = func()
+            if hasattr(result, '__await__'):
+                await result
+        except Exception:
+            logger.exception("命令执行异常")
+
+    # ═══════════════════════════════════════════════════════════════
+    # Event formatting (unchanged V1/V2 style)
+    # ═══════════════════════════════════════════════════════════════
 
     def _format_event(self, data: EventData) -> str:
-        """根据事件类型生成 Telegram 消息."""
         event = data.event
 
         if event == Events.POSITION_OPENED:
@@ -271,7 +363,6 @@ class TelegramBot:
             return data.message
 
     def _fmt_position_opened(self, data: EventData) -> str:
-        """开仓通知 - V1 风格."""
         side = _side_emoji(data.extra.get("side", "") if data.extra else "")
         now_str = data.message or ""
         symbol = _html_esc(data.symbol)
@@ -281,19 +372,15 @@ class TelegramBot:
         notional = entry * qty if entry > 0 and qty > 0 else 0
 
         parts = []
-        # 标题
         parts.append(f"🟢 <b>宙斯交易中枢 | 开仓成功</b>")
         if now_str:
             parts.append(f"🕒 <code>{_html_esc(now_str)}</code>")
         parts.append("")
         parts.append(f"🔥 <b>{symbol}</b>｜{side}｜<code>{lev}x</code>")
         parts.append(SEP)
-
-        # 入场 + 仓位
         parts.append(f"💵 <b>入场</b>: <code>{entry:.5f}</code>")
         parts.append(f"📦 <b>仓位</b>: <code>{qty}</code>｜名义 <code>{notional:.2f} USDT</code>")
 
-        # 止损 + 止盈 (带预估盈亏)
         if data.sl_price > 0:
             sl_dist_pct = abs(data.sl_price - entry) / entry * 100 if entry > 0 else 0
             if side == "📈 做多":
@@ -306,7 +393,6 @@ class TelegramBot:
         if data.tp_tiers:
             for t in data.tp_tiers:
                 tp_price = t.get("price", 0)
-                tp_pct = t.get("pct", 0)
                 if tp_price > 0 and qty > 0:
                     tier_qty_ratio = t.get("qty_ratio", 1.0)
                     tier_qty = qty * tier_qty_ratio
@@ -318,14 +404,12 @@ class TelegramBot:
             if tp_total_pnl > 0:
                 parts.append(f"💰 <b>预计止盈</b>: <code>+{tp_total_pnl:.2f} USDT</code>")
 
-        # 风险信息
         if data.extra:
             risk_usdt = data.extra.get("risk_usdt", 0)
             risk_pct = data.extra.get("risk_pct", 0)
             if risk_usdt > 0:
                 parts.append(f"🎯 <b>风险</b>: <code>{risk_usdt:.2f} USDT</code>｜<code>{risk_pct:.2f}%</code>")
 
-        # OI / Funding
         if data.extra:
             oi_pct = data.extra.get("oi_change_pct", 0)
             funding = data.extra.get("funding_rate", 0)
@@ -336,7 +420,6 @@ class TelegramBot:
                 funding_str = f" | Funding <code>{funding:+.4f}%</code>" if funding else ""
                 parts.append(f"<b>OI/Funding</b> {bonus_str}{oi_str}{funding_str}")
 
-        # 策略 + 评分
         if data.extra:
             strategy = data.extra.get("strategy_line", "")
             if strategy:
@@ -347,12 +430,10 @@ class TelegramBot:
             bar = _score_bar(data.score)
             parts.append(f"⭐ <b>评分</b>: <code>{data.score:.0f}/100</code> {bar}｜{label}")
 
-        # 开仓因子
         if data.top_factors and len(data.top_factors) > 0:
             factors = "、".join(data.top_factors[:3])
             parts.append(f"📊 <b>开仓理由</b>: {_html_esc(factors)}")
 
-        # 分批止盈明细
         if data.tp_tiers and len(data.tp_tiers) > 0:
             parts.append("")
             parts.append(f"📊 <b>分批止盈</b>")
@@ -371,13 +452,11 @@ class TelegramBot:
                     f"({int(qty_ratio*100)}% / {tier_qty:.3f}) | 预计 <code>+{tp_pnl:.2f} USDT</code>"
                 )
 
-        # 结尾
         parts.append(SEP)
         parts.append("✅ 已成交，保护单将同步确认")
         return "\n".join(parts)
 
     def _fmt_position_closed(self, data: EventData) -> str:
-        """平仓通知 - V1 风格."""
         pnl_emoji = "🟢" if data.pnl >= 0 else "🔴"
         side = _side_emoji(data.extra.get("side", "") if data.extra else "")
         symbol = _html_esc(data.symbol)
@@ -390,7 +469,6 @@ class TelegramBot:
         hold_sec = data.extra.get("hold_seconds", 0) if data.extra else 0
 
         parts = []
-        # 标题
         parts.append(f"{pnl_emoji} <b>宙斯交易中枢 | 平仓完成</b>")
         if data.message:
             parts.append(f"🕒 <code>{_html_esc(data.message)}</code>")
@@ -398,7 +476,6 @@ class TelegramBot:
         parts.append(f"<b>{symbol}</b>｜{side}")
         parts.append(SEP)
 
-        # 价格变动
         if entry_price > 0:
             parts.append(f"💵 <b>价格</b>: <code>{entry_price:.5f}</code> → <code>{exit_price:.5f}</code>")
             if side == "📈 做多":
@@ -409,37 +486,28 @@ class TelegramBot:
         else:
             parts.append(f"💵 <b>平仓价</b>: <code>{exit_price:.5f}</code>")
 
-        # PnL
         parts.append(f"💰 <b>盈亏</b>: <b>{_fmt_pnl(pnl)} USDT</b>（<code>{pnl_pct:+.2f}%</code>）")
-
-        # 平仓原因
         parts.append(f"📌 <b>原因</b>: <code>{reason_label}</code>")
 
-        # ROI (如果有杠杆)
         if data.extra and data.extra.get("leverage", 0) > 0:
             lev = data.extra["leverage"]
             roi = pnl_pct * lev
             parts.append(f"🚀 <b>实际 ROI</b>: <code>{roi:+.2f}%</code>")
 
-        # 持仓时长
         if hold_sec > 0:
             parts.append(f"⏱ <b>持仓</b>: {_hold_duration(hold_sec)}")
 
-        # 策略
         if data.extra and data.extra.get("strategy_line"):
             parts.append(f"🧭 <b>策略</b>: <code>{_html_esc(str(data.extra['strategy_line']))}</code>")
 
-        # 结尾
         parts.append(SEP)
         if pnl >= 0:
             parts.append("✅ 盈利离场，记录已入库")
         else:
             parts.append("🔴 亏损离场，等待复盘优化")
-
         return "\n".join(parts)
 
     def _fmt_protection_placed(self, data: EventData) -> str:
-        """保护单放置通知."""
         symbol = _html_esc(data.symbol)
         parts = [f"🛡️ <b>宙斯交易中枢 | 保护单就绪 · {symbol}</b>", SEP]
         if data.sl_price > 0:
@@ -452,7 +520,6 @@ class TelegramBot:
         return "\n".join(parts)
 
     def _fmt_tp_triggered(self, data: EventData) -> str:
-        """TP触发通知."""
         tier = data.extra.get("tier", "?") if data.extra else "?"
         return (
             f"🎯 <b>宙斯交易中枢 | TP{tier} 触发 · {_html_esc(data.symbol)}</b>\n"
@@ -463,7 +530,6 @@ class TelegramBot:
         )
 
     def _fmt_sl_triggered(self, data: EventData) -> str:
-        """止损触发通知."""
         return (
             f"🛑 <b>宙斯交易中枢 | 止损触发 · {_html_esc(data.symbol)}</b>\n"
             f"{SEP}\n"
@@ -471,12 +537,7 @@ class TelegramBot:
             f"💰 亏损: <code>{_fmt_pnl(data.pnl)}</code> ({data.pnl_pct:+.2f}%)"
         )
 
-    # ================================================================
-    # 工具函数
-    # ================================================================
-
     def _exit_reason_label(self, reason: str) -> str:
-        """平仓原因 → 中文标签."""
         labels = {
             "TP1": "止盈1触发",
             "TP2": "止盈2触发",
@@ -492,8 +553,3 @@ class TelegramBot:
             "EXCHANGE_REALIZED": "交易所已实现盈亏同步",
         }
         return labels.get(reason, reason)
-
-    def _check_user(self, update) -> bool:
-        if not self._allowed_users:
-            return True
-        return update.effective_user.username in self._allowed_users

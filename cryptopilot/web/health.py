@@ -303,6 +303,33 @@ def create_health_app(
                             tp = float(ao.get("triggerPrice", ao.get("price", ao.get("stopPrice", 0))) or 0)
                             if tp_price == 0.0 and tp > 0:
                                 tp_price = tp
+                    # TP 可能以 LIMIT 挂单形式存在 (三层止盈 LIMIT 单)
+                    # LONG: 找 SELL 方向的最高 LIMIT 价格 (离 entry 最远 = 最高止盈层级)
+                    # SHORT: 找 BUY 方向的最低 LIMIT 价格 (离 entry 最远 = 最低止盈层级)
+                    if tp_price == 0.0:
+                        pos_side = pos.get("side", "")
+                        entry = float(pos.get("entry_price", 0))
+                        tp_limit_prices: list[float] = []
+                        for o in all_orders:
+                            if o.symbol != sym:
+                                continue
+                            if o.order_type != "LIMIT":
+                                continue
+                            oprice = float(o.price or 0)
+                            if oprice <= 0:
+                                continue
+                            # 根据仓位方向筛选
+                            if pos_side == "LONG":
+                                if o.side == "SELL" and (entry == 0 or oprice > entry):
+                                    tp_limit_prices.append(oprice)
+                            elif pos_side == "SHORT":
+                                if o.side == "BUY" and (entry == 0 or oprice < entry):
+                                    tp_limit_prices.append(oprice)
+                        if tp_limit_prices:
+                            if pos_side == "LONG":
+                                tp_price = max(tp_limit_prices)
+                            elif pos_side == "SHORT":
+                                tp_price = min(tp_limit_prices)
                     pos["sl_price"] = round(sl_price, 5) if sl_price > 0 else 0.0
                     pos["tp_price"] = round(tp_price, 5) if tp_price > 0 else 0.0
         except Exception:
@@ -509,9 +536,9 @@ def create_health_app(
                     "oi_change": round(c.oi_change_pct, 1),
                     "funding_rate": f"{c.funding_rate*100:.4f}%",
                     "scanner_score": round(c.scanner_score, 1),
-                    "composite_score": round(c.scanner_score, 1),
-                    "direction": "HOLD",
-                    "confidence": 0.0,
+                    "composite_score": round(c.composite_score, 1),
+                    "direction": c.direction,
+                    "confidence": c.confidence,
                     "reasons": c.scrape_reasons,
                 }
                 for c in candidates
