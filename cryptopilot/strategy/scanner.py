@@ -42,7 +42,7 @@ class MarketScanner:
         self,
         cache,  # MarketDataCache
         candidate_pool,  # CandidatePool
-        scan_interval: float = 2.0,
+        scan_interval: float = 300.0,  # 默认对齐V1深度扫描间隔
         min_change_pct: float = 1.5,
         volume_mult: float = 1.5,
         oi_change_threshold: float = 3.0,

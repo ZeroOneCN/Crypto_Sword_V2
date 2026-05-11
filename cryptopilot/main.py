@@ -559,7 +559,7 @@ async def main() -> None:
                 market_cap_fetcher=mcap_fetcher,
                 rest_data=rest_data,
                 special_signals=special_signals,
-                scan_interval=30.0,
+                scan_interval=300.0,  # 对齐V1深度扫描间隔,避免REST限流
                 top_k=3,
                 max_signals_per_cycle=1,  # 每轮仅最强信号
                 buy_threshold=buy_threshold,

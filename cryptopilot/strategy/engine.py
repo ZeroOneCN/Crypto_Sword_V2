@@ -206,7 +206,7 @@ class StrategyEngine:
             volume_mult=1.8,
             oi_change_threshold=3.0,
             min_score=25.0,
-            max_symbols_to_scan=200,
+            max_symbols_to_scan=50,  # 对齐V1的Top-30扫描范围,减少REST调用
             rest_data=rest_data,
         )
 
