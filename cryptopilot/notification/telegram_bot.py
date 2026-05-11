@@ -100,10 +100,26 @@ class TelegramBot:
             logger.info("Telegram 未启用 (缺少 token/chat_id)")
             return
         try:
+            import asyncio as _asyncio
+
             from telegram import Update
             from telegram.ext import Application, CommandHandler, ContextTypes
+            from telegram.request import HTTPXRequest
 
-            app = Application.builder().token(self._token).build()
+            # Explicit timeouts to avoid hanging on slow connections
+            # Default PTB timeouts (connect=5, read=5) can cause 10s+ stalls
+            _request = HTTPXRequest(
+                connect_timeout=8.0,
+                read_timeout=8.0,
+                write_timeout=8.0,
+            )
+
+            app = (
+                Application.builder()
+                .token(self._token)
+                .request(_request)
+                .build()
+            )
             self._app = app
 
             async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -161,7 +177,18 @@ class TelegramBot:
             app.add_handler(CommandHandler("close_all", close_all))
             app.add_handler(CommandHandler("help", help_cmd))
 
-            await app.initialize()
+            # Hard timeout for initialization — prevents hanging on network issues
+            _INIT_TIMEOUT = 20.0  # generous but bounded
+            try:
+                await _asyncio.wait_for(app.initialize(), timeout=_INIT_TIMEOUT)
+            except _asyncio.TimeoutError:
+                logger.error(
+                    f"Telegram 初始化超时 ({_INIT_TIMEOUT}s) — "
+                    "网络到 api.telegram.org 可能不可达"
+                )
+                self._app = None
+                return
+
             await app.start()
             self._running = True
             logger.info("Telegram Bot 已启动")
@@ -170,6 +197,8 @@ class TelegramBot:
             logger.warning("python-telegram-bot 未安装 — Telegram 禁用")
         except Exception:
             logger.exception("Telegram Bot 启动失败")
+            self._app = None
+            self._running = False
 
     async def stop(self) -> None:
         if self._app and self._running:

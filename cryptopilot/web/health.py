@@ -289,17 +289,18 @@ def create_health_app(
                         elif o.order_type in ("TAKE_PROFIT_MARKET", "TAKE_PROFIT"):
                             if tp_price == 0.0:
                                 tp_price = float(o.price or o.stop_price or 0)
-                    # 遍历 algo orders
+                    # 遍历 algo orders (Binance 返回 triggerPrice, 不是 stopPrice)
                     for ao in algo_orders:
                         if ao.get("symbol", "") != sym:
                             continue
                         otype = ao.get("type", ao.get("orderType", ""))
                         if otype in ("STOP_MARKET", "STOP"):
-                            sp = float(ao.get("stopPrice", 0) or 0)
+                            # Binance algo orders use "triggerPrice" field, not "stopPrice"
+                            sp = float(ao.get("triggerPrice", ao.get("stopPrice", 0)) or 0)
                             if sl_price == 0.0 and sp > 0:
                                 sl_price = sp
                         elif otype in ("TAKE_PROFIT_MARKET", "TAKE_PROFIT"):
-                            tp = float(ao.get("price", ao.get("stopPrice", 0)) or 0)
+                            tp = float(ao.get("triggerPrice", ao.get("price", ao.get("stopPrice", 0))) or 0)
                             if tp_price == 0.0 and tp > 0:
                                 tp_price = tp
                     pos["sl_price"] = round(sl_price, 5) if sl_price > 0 else 0.0
@@ -318,6 +319,16 @@ def create_health_app(
         """返回当前挂单状态 (含 SL/TP 保护单统计 + algo orders)."""
         if order_executor is None:
             return {"error": "订单执行器不可用"}
+
+        # 获取活跃持仓的币种集合 (用于过滤无持仓的僵尸保护单)
+        active_symbols: set[str] = set()
+        if position_manager is not None:
+            try:
+                active_positions = position_manager.get_all_positions()
+                active_symbols = {p.get("symbol", "") for p in active_positions}
+            except Exception:
+                pass
+
         try:
             open_orders = await order_executor.get_open_orders()
             # 按币种分组统计保护单
@@ -347,10 +358,15 @@ def create_health_app(
 
             # 同时查询 algo orders (Binance 条件单)
             total_algo_orders = 0
+            stale_count = 0
             try:
                 algo_orders = await order_executor.get_open_algo_orders()
                 for ao in algo_orders:
                     sym = ao.get("symbol", "")
+                    # 过滤无持仓的僵尸保护单
+                    if active_symbols and sym not in active_symbols:
+                        stale_count += 1
+                        continue
                     if sym not in by_symbol:
                         by_symbol[sym] = {
                             "symbol": sym,
@@ -366,17 +382,23 @@ def create_health_app(
                         info["tp_orders"] += 1
                         info["total"] += 1
                     total_algo_orders += 1
+                    # Binance algo orders use "triggerPrice" (not "stopPrice")
+                    trigger_price = float(ao.get("triggerPrice", ao.get("stopPrice", 0)) or 0)
+                    order_price = float(ao.get("price", 0) or 0)
                     info["orders"].append({
                         "type": otype,
                         "side": ao.get("side", ""),
-                        "price": float(ao.get("price", 0) or 0),
-                        "stop_price": float(ao.get("stopPrice", 0) or 0),
+                        "price": order_price,
+                        "stop_price": trigger_price,
                         "qty": float(ao.get("origQty", ao.get("quantity", 0)) or 0),
                         "status": ao.get("algoStatus", ao.get("status", "")),
                         "algo": True,
                     })
             except Exception:
                 logger.debug("Algo orders fetch skipped")
+
+            if stale_count > 0:
+                logger.debug(f"已过滤 {stale_count} 个无持仓的僵尸保护单")
 
             return {
                 "total": len(open_orders) + total_algo_orders,

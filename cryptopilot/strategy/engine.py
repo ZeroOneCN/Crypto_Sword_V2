@@ -178,7 +178,7 @@ class StrategyEngine:
         from cryptopilot.strategy.base import Signal as BaseSignal
         from cryptopilot.market.types import StreamMessage
 
-        pool = CandidatePool(max_size=20, ttl_seconds=60)
+        pool = CandidatePool(max_size=20, ttl_seconds=scan_interval * 2)
         scoring = ScoringEngine(
             cache=cache,
             buy_threshold=buy_threshold,
@@ -215,10 +215,10 @@ class StrategyEngine:
         _prev_funding: dict[str, float] = {}
 
         async def scoring_loop():
-            """评分循环: 5s 取候选 → 评分 → 最强1信号."""
+            """评分循环: 30s 取候选 → 评分 → 最强1信号."""
             score_heartbeat = 0
             while True:
-                await asyncio.sleep(scan_interval)
+                await asyncio.sleep(30)  # 高频轮询, 避免相位死锁
                 score_heartbeat += 1
                 try:
                     top = await pool.pop_top(top_k)
