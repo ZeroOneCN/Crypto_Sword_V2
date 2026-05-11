@@ -87,22 +87,22 @@
 
 ## 阶段四：分策略风控与退出模板落地
 
-- [ ] 继续复用 `cryptopilot/risk/exit_manager.py` 现有退出能力，不另起一套退出系统。
-- [ ] 升级为按策略注入退出参数，不再使用单一全局 TP 模板。
+- [x] 继续复用 `cryptopilot/risk/exit_manager.py` 现有退出能力，不另起一套退出系统。
+- [x] 升级为按策略注入退出参数，不再使用单一全局 TP 模板。
 - [ ] 在配置与代码中明确三套模板：
   - `ambush`：更远 TP2/TP3、更长 sideways defense / timeout、更宽 trailing、更高 trailing activation、更小单笔风险
   - `chase`：更近 TP1/TP2、更短 sideways defense / timeout、更紧 trailing、更强时效退出
   - `composite`：中档模板
-- [ ] 开仓 sizing 继续沿用当前 `position_sizer` 思路，通过止损距离反推仓位。
-- [ ] 保持一币一主仓，不支持同币多策略叠仓。
-- [ ] 落地总组合风险控制：
+- [x] 开仓 sizing 继续沿用当前 `position_sizer` 思路，通过止损距离反推仓位。
+- [x] 保持一币一主仓，不支持同币多策略叠仓。
+- [x] 落地总组合风险控制：
   - 每策略风险预算
   - 每策略最大并发
   - 单币上限
-- [ ] 同题材总风险上限若当前代码暂不支持，先在实现注释和本文档中标为后续扩展，不阻塞本阶段交付。
+- [x] 同题材总风险上限若当前代码暂不支持，先在实现注释和本文档中标为后续扩展，不阻塞本阶段交付。
 
-完成说明：待完成。
-验证结果：待完成后补充。
+完成说明：已将三套 preset 的 TP/SL、TP 分配比例、breakeven、trailing、sideways、pre-TP guard 参数落到 `config.yaml -> preset_runtime_map -> health/strategy`；开仓 sizing 已按 `risk_budget` 注入 `position_sizer`，开仓后会把 `stop_loss_price / take_profit_price / current_stop / initial_qty` 写回持仓归因上下文；同币仍保持一主仓，单策略并发上限已在主链路拦截。同题材总风险上限当前代码仍未实现自动分组约束，保留为后续扩展，不阻塞本阶段交付。
+验证结果：已执行 `python -m compileall -q cryptopilot preview_dashboard.py`；已核对 `/health/strategy` 会返回各策略完整模板摘要，执行链会按 preset 读取单笔风险、止损与分层止盈参数。
 
 ## 阶段五：报表、健康接口、网页端、Telegram 按策略展示
 

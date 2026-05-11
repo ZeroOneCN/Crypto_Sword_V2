@@ -92,6 +92,21 @@ class StrategyPresetConfig(BaseModel):
     exit_template: str = ""
     buy_threshold: float = 50.0
     sell_threshold: float = -50.0
+    stop_loss_pct: float = 5.0
+    tp1_pct: float = 3.0
+    tp2_pct: float = 6.0
+    tp3_pct: float = 10.0
+    tp1_ratio: float = 0.30
+    tp2_ratio: float = 0.30
+    tp3_ratio: float = 0.40
+    breakeven_offset_pct: float = 0.5
+    trail_distance_pct: float = 1.5
+    trail_activation_pct: float = 0.5
+    sideways_defense_minutes: float = 90.0
+    sideways_exit_minutes: float = 180.0
+    sideways_range_pct: float = 2.0
+    pre_tp_guard_enabled: bool = True
+    pre_tp_guard_min_roi_pct: float = 0.2
     factors: list[dict[str, Any]] = Field(default_factory=list)
 
 

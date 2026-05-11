@@ -163,6 +163,10 @@ class PositionManager:
         strategy_preset: str,
         support_presets: list[str] | None = None,
         entry_reason: str | None = None,
+        stop_loss_price: float | None = None,
+        take_profit_price: float | None = None,
+        current_stop: float | None = None,
+        initial_qty: float | None = None,
     ) -> None:
         """Persist stable strategy attribution on an open position."""
 
@@ -174,6 +178,14 @@ class PositionManager:
         pos["support_presets"] = ",".join(support_presets or [])
         if entry_reason is not None:
             pos["entry_reason"] = entry_reason
+        if stop_loss_price is not None:
+            pos["stop_loss_price"] = stop_loss_price
+        if take_profit_price is not None:
+            pos["take_profit_price"] = take_profit_price
+        if current_stop is not None:
+            pos["current_stop"] = current_stop
+        if initial_qty is not None:
+            pos["initial_qty"] = initial_qty
         try:
             rec = PositionRecord(**{k: v for k, v in pos.items() if k in PositionRecord.__dataclass_fields__})
             await self._repo.upsert(rec)
@@ -192,6 +204,40 @@ class PositionManager:
         enriched["strategy_preset"] = enriched.get("strategy_preset") or inferred["strategy_preset"]
         enriched["support_presets"] = enriched.get("support_presets") or inferred["support_presets"]
         return enriched
+
+    async def update_risk_state(
+        self,
+        symbol: str,
+        *,
+        current_stop: float | None = None,
+        stop_loss_price: float | None = None,
+        take_profit_price: float | None = None,
+        tp_tiers_filled: str | None = None,
+        partial_tp_count: int | None = None,
+        sideways_defense_moved: int | None = None,
+    ) -> None:
+        """Persist runtime exit-state changes for an open position."""
+
+        pos = self._positions.get(symbol)
+        if pos is None:
+            return
+        if current_stop is not None:
+            pos["current_stop"] = current_stop
+        if stop_loss_price is not None:
+            pos["stop_loss_price"] = stop_loss_price
+        if take_profit_price is not None:
+            pos["take_profit_price"] = take_profit_price
+        if tp_tiers_filled is not None:
+            pos["tp_tiers_filled"] = tp_tiers_filled
+        if partial_tp_count is not None:
+            pos["partial_tp_count"] = partial_tp_count
+        if sideways_defense_moved is not None:
+            pos["sideways_defense_moved"] = sideways_defense_moved
+        try:
+            rec = PositionRecord(**{k: v for k, v in pos.items() if k in PositionRecord.__dataclass_fields__})
+            await self._repo.upsert(rec)
+        except Exception:
+            logger.debug(f"鏃犳硶淇濆瓨 risk state for {symbol}")
 
     async def mark_closed(
         self,

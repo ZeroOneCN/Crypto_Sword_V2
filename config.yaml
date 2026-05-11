@@ -63,6 +63,19 @@ scoring:
       risk_budget: 0.25
       max_concurrent: 2
       exit_template: chase
+      stop_loss_pct: 4.5
+      tp1_pct: 2.0
+      tp2_pct: 4.0
+      tp3_pct: 6.0
+      tp1_ratio: 0.35
+      tp2_ratio: 0.35
+      tp3_ratio: 0.30
+      trail_distance_pct: 1.2
+      trail_activation_pct: 0.35
+      sideways_defense_minutes: 30
+      sideways_exit_minutes: 75
+      sideways_range_pct: 1.2
+      pre_tp_guard_min_roi_pct: 0.15
       buy_threshold: 50
       sell_threshold: -50
       factors:
@@ -77,6 +90,19 @@ scoring:
       risk_budget: 0.50
       max_concurrent: 4
       exit_template: composite
+      stop_loss_pct: 5.5
+      tp1_pct: 3.0
+      tp2_pct: 6.0
+      tp3_pct: 10.0
+      tp1_ratio: 0.30
+      tp2_ratio: 0.30
+      tp3_ratio: 0.40
+      trail_distance_pct: 1.5
+      trail_activation_pct: 0.5
+      sideways_defense_minutes: 90
+      sideways_exit_minutes: 180
+      sideways_range_pct: 2.0
+      pre_tp_guard_min_roi_pct: 0.20
       buy_threshold: 45
       sell_threshold: -45
       factors:
@@ -96,6 +122,19 @@ scoring:
       risk_budget: 0.25
       max_concurrent: 2
       exit_template: ambush
+      stop_loss_pct: 7.5
+      tp1_pct: 4.0
+      tp2_pct: 9.0
+      tp3_pct: 15.0
+      tp1_ratio: 0.25
+      tp2_ratio: 0.30
+      tp3_ratio: 0.45
+      trail_distance_pct: 2.4
+      trail_activation_pct: 1.1
+      sideways_defense_minutes: 180
+      sideways_exit_minutes: 420
+      sideways_range_pct: 3.2
+      pre_tp_guard_min_roi_pct: 0.35
       buy_threshold: 55
       sell_threshold: -55
       factors:

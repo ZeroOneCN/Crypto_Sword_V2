@@ -759,3 +759,47 @@ def build_exit_manager_from_config(
         notifier=notifier,
         cache=cache,
     )
+
+
+def build_exit_manager_from_runtime(
+    runtime_cfg: dict,
+    executor=None,
+    position_manager=None,
+    notifier=None,
+    cache=None,
+) -> ExitManager:
+    """Create an ExitManager from one preset runtime config."""
+
+    tiers = [
+        TpTierConfig(
+            level=1,
+            pct=float(runtime_cfg.get("tp1_pct", 3.0)),
+            ratio=float(runtime_cfg.get("tp1_ratio", 0.30)),
+        ),
+        TpTierConfig(
+            level=2,
+            pct=float(runtime_cfg.get("tp2_pct", 6.0)),
+            ratio=float(runtime_cfg.get("tp2_ratio", 0.30)),
+        ),
+        TpTierConfig(
+            level=3,
+            pct=float(runtime_cfg.get("tp3_pct", 10.0)),
+            ratio=float(runtime_cfg.get("tp3_ratio", 0.40)),
+        ),
+    ]
+
+    return ExitManager(
+        tp_tiers=tiers,
+        breakeven_offset_pct=float(runtime_cfg.get("breakeven_offset_pct", 0.5)),
+        trail_distance_pct=float(runtime_cfg.get("trail_distance_pct", 1.5)),
+        trail_activation_pct=float(runtime_cfg.get("trail_activation_pct", 0.5)),
+        sideways_defense_minutes=float(runtime_cfg.get("sideways_defense_minutes", 90.0)),
+        sideways_exit_minutes=float(runtime_cfg.get("sideways_exit_minutes", 180.0)),
+        sideways_range_pct=float(runtime_cfg.get("sideways_range_pct", 2.0)),
+        pre_tp_guard_enabled=bool(runtime_cfg.get("pre_tp_guard_enabled", True)),
+        pre_tp_guard_min_roi_pct=float(runtime_cfg.get("pre_tp_guard_min_roi_pct", 0.2)),
+        executor=executor,
+        position_manager=position_manager,
+        notifier=notifier,
+        cache=cache,
+    )

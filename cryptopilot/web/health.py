@@ -318,6 +318,21 @@ def create_health_app(
                     "risk_budget": runtime.get("risk_budget"),
                     "max_concurrent": runtime.get("max_concurrent"),
                     "exit_template": runtime.get("exit_template"),
+                    "stop_loss_pct": runtime.get("stop_loss_pct"),
+                    "tp1_pct": runtime.get("tp1_pct"),
+                    "tp2_pct": runtime.get("tp2_pct"),
+                    "tp3_pct": runtime.get("tp3_pct"),
+                    "tp1_ratio": runtime.get("tp1_ratio"),
+                    "tp2_ratio": runtime.get("tp2_ratio"),
+                    "tp3_ratio": runtime.get("tp3_ratio"),
+                    "breakeven_offset_pct": runtime.get("breakeven_offset_pct"),
+                    "trail_distance_pct": runtime.get("trail_distance_pct"),
+                    "trail_activation_pct": runtime.get("trail_activation_pct"),
+                    "sideways_defense_minutes": runtime.get("sideways_defense_minutes"),
+                    "sideways_exit_minutes": runtime.get("sideways_exit_minutes"),
+                    "sideways_range_pct": runtime.get("sideways_range_pct"),
+                    "pre_tp_guard_enabled": runtime.get("pre_tp_guard_enabled"),
+                    "pre_tp_guard_min_roi_pct": runtime.get("pre_tp_guard_min_roi_pct"),
                     "factor_weights": [
                         {"name": f.name, "weight": round(f.weight, 3)}
                         for f in getattr(engine, "_factors", [])

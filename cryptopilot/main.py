@@ -642,6 +642,21 @@ async def main() -> None:
             "exit_template": preset_cfg.get("exit_template", preset_name),
             "buy_threshold": preset_cfg.get("buy_threshold"),
             "sell_threshold": preset_cfg.get("sell_threshold"),
+            "stop_loss_pct": float(preset_cfg.get("stop_loss_pct", cfg.risk.stop_loss_pct)),
+            "tp1_pct": float(preset_cfg.get("tp1_pct", cfg.scoring.tp_tiers.tp1_pct)),
+            "tp2_pct": float(preset_cfg.get("tp2_pct", cfg.scoring.tp_tiers.tp2_pct)),
+            "tp3_pct": float(preset_cfg.get("tp3_pct", cfg.scoring.tp_tiers.tp3_pct)),
+            "tp1_ratio": float(preset_cfg.get("tp1_ratio", cfg.scoring.tp_tiers.tp1_ratio)),
+            "tp2_ratio": float(preset_cfg.get("tp2_ratio", cfg.scoring.tp_tiers.tp2_ratio)),
+            "tp3_ratio": float(preset_cfg.get("tp3_ratio", cfg.scoring.tp_tiers.tp3_ratio)),
+            "breakeven_offset_pct": float(preset_cfg.get("breakeven_offset_pct", cfg.scoring.tp_tiers.breakeven_offset_pct)),
+            "trail_distance_pct": float(preset_cfg.get("trail_distance_pct", cfg.risk.trailing_distance_pct)),
+            "trail_activation_pct": float(preset_cfg.get("trail_activation_pct", cfg.risk.trailing_activation_pct)),
+            "sideways_defense_minutes": float(preset_cfg.get("sideways_defense_minutes", cfg.scoring.tp_tiers.sideways_defense_minutes)),
+            "sideways_exit_minutes": float(preset_cfg.get("sideways_exit_minutes", cfg.scoring.tp_tiers.sideways_exit_minutes)),
+            "sideways_range_pct": float(preset_cfg.get("sideways_range_pct", cfg.scoring.tp_tiers.sideways_range_pct)),
+            "pre_tp_guard_enabled": bool(preset_cfg.get("pre_tp_guard_enabled", cfg.scoring.tp_tiers.pre_tp_guard_enabled)),
+            "pre_tp_guard_min_roi_pct": float(preset_cfg.get("pre_tp_guard_min_roi_pct", cfg.scoring.tp_tiers.pre_tp_guard_min_roi_pct)),
         }
         for preset_name, preset_cfg in enabled_presets.items()
     }
@@ -902,11 +917,10 @@ async def main() -> None:
                 # Look up strategy-specific risk config
                 preset_name = signal.preset or signal.strategy_id.split("_", 1)[0]
                 preset_runtime = preset_runtime_map.get(preset_name, {})
-                strat_risk = {
-                    "risk_budget": preset_runtime.get("risk_budget", 0.0),
-                    "max_concurrent": preset_runtime.get("max_concurrent", 1),
-                    "exit_template": preset_runtime.get("exit_template", preset_name),
-                }
+                strat_risk = dict(preset_runtime)
+                strat_risk.setdefault("risk_budget", 0.0)
+                strat_risk.setdefault("max_concurrent", 1)
+                strat_risk.setdefault("exit_template", preset_name)
 
                 # Execute signal
                 await _execute_signal(
@@ -1014,12 +1028,26 @@ async def main() -> None:
     # ---- Profit Locker (background task) ----
     from cryptopilot.strategy.base import Signal as BaseSignal
     from cryptopilot.risk.profit_locker import ProfitLocker
+    from cryptopilot.risk.exit_manager import build_exit_manager_from_runtime
 
-    profit_locker = ProfitLocker(
-        activation_pct=3.0,
-        lock_fraction=0.5,
-        breakeven_after_pct=2.0,
-    )
+    exit_managers = {
+        preset_name: build_exit_manager_from_runtime(
+            runtime_cfg,
+            executor=order_executor,
+            position_manager=position_manager,
+            notifier=notifier,
+            cache=data_cache,
+        )
+        for preset_name, runtime_cfg in preset_runtime_map.items()
+    }
+    profit_lockers = {
+        preset_name: ProfitLocker(
+            activation_pct=float(runtime_cfg.get("tp1_pct", 3.0)),
+            lock_fraction=float(runtime_cfg.get("tp1_ratio", 0.30)),
+            breakeven_after_pct=float(runtime_cfg.get("trail_activation_pct", 0.5)),
+        )
+        for preset_name, runtime_cfg in preset_runtime_map.items()
+    }
 
     async def profit_lock_loop():
         """Periodically check open positions for profit locking opportunities."""
@@ -1029,8 +1057,12 @@ async def main() -> None:
                 positions = position_manager.get_all_positions()
                 for pos in positions:
                     sym = pos.get("symbol", "")
+                    strategy_ctx = position_manager.get_position_context(sym) or {}
+                    preset_name = strategy_ctx.get("strategy_preset") or "composite"
+                    profit_locker = profit_lockers.get(preset_name)
                     if not sym or abs(pos.get("qty", 0)) <= 0:
-                        profit_locker.reset(sym)
+                        if profit_locker is not None:
+                            profit_locker.reset(sym)
                         continue
 
                     entry = pos.get("entry_price", 0)
@@ -1038,7 +1070,7 @@ async def main() -> None:
                     side = pos.get("side", "LONG")
                     qty = abs(pos.get("qty", 0))
 
-                    if entry <= 0 or mark <= 0 or qty <= 0:
+                    if entry <= 0 or mark <= 0 or qty <= 0 or profit_locker is None:
                         continue
 
                     # Move stop to breakeven
@@ -1051,10 +1083,14 @@ async def main() -> None:
                             symbol=sym,
                         ))
                         await event_repo.create(StrategyEvent(
-                            strategy_id=(position_manager.get_position_context(sym) or {}).get("strategy_id", sym),
+                            strategy_id=strategy_ctx.get("strategy_id", sym),
                             event_type="move_stop",
                             symbol=sym,
-                            details='{"reason":"breakeven_after_profit_lock"}',
+                            details=(
+                                '{"reason":"breakeven_after_profit_lock","preset":"'
+                                + preset_name
+                                + '"}'
+                            ),
                         ))
 
                     # Partial profit lock
@@ -1078,11 +1114,13 @@ async def main() -> None:
                         partial_signal.take_profit = 0
                         await signal_queue.put(partial_signal)
                         await event_repo.create(StrategyEvent(
-                            strategy_id=(position_manager.get_position_context(sym) or {}).get("strategy_id", "profit_locker"),
+                            strategy_id=strategy_ctx.get("strategy_id", "profit_locker"),
                             event_type="partial_take_profit",
                             symbol=sym,
                             details=(
-                                '{"reason":"profit_lock","lock_fraction":"'
+                                '{"reason":"profit_lock","preset":"'
+                                + preset_name
+                                + '","lock_fraction":"'
                                 + f"{profit_locker._lock_fraction:.2f}"
                                 + '"}'
                             ),
@@ -1381,6 +1419,7 @@ async def _execute_signal(
             entry_price=entry_price,
             stop_loss_pct=stop_loss_pct,
             leverage=default_leverage,
+            risk_pct=float(risk.get("risk_budget", 0.0) or cfg.risk.risk_per_trade or 1.5),
         )
     else:
         # Close position — use existing position quantity
@@ -1522,6 +1561,9 @@ async def _execute_signal(
             tp1_pct = float(risk.get("tp1_pct", 3.0))
             tp2_pct = float(risk.get("tp2_pct", 6.0))
             tp3_pct = float(risk.get("tp3_pct", 10.0))
+            tp1_ratio = float(risk.get("tp1_ratio", 0.30))
+            tp2_ratio = float(risk.get("tp2_ratio", 0.30))
+            tp3_ratio = float(risk.get("tp3_ratio", 0.40))
             if pos_side == "LONG":
                 tp1 = fill_price * (1 + tp1_pct / 100)
                 tp2 = fill_price * (1 + tp2_pct / 100)
@@ -1534,7 +1576,7 @@ async def _execute_signal(
             tp_reqs = []
             close_side = "SELL" if pos_side == "LONG" else "BUY"
             for tp_price, tp_qty_ratio, label in [
-                (tp1, 0.30, "TP1"), (tp2, 0.30, "TP2"), (tp3, 0.40, "TP3")
+                (tp1, tp1_ratio, "TP1"), (tp2, tp2_ratio, "TP2"), (tp3, tp3_ratio, "TP3")
             ]:
                 tp_qty = qty * tp_qty_ratio
                 # Precision clamping
@@ -1566,7 +1608,7 @@ async def _execute_signal(
             sl_tp_placed = sl_success and tp_count > 0
             logger.info(
                 f"保护单: {signal.symbol} SL={sl_price:.5f} "
-                f"TP1={tp1:.5f}(30%) TP2={tp2:.5f}(30%) TP3={tp3:.5f}(40%) "
+                f"TP1={tp1:.5f}({tp1_ratio*100:.0f}%) TP2={tp2:.5f}({tp2_ratio*100:.0f}%) TP3={tp3:.5f}({tp3_ratio*100:.0f}%) "
                 f"[{tp_count}/3 个TP已放置]"
             )
 
@@ -1574,7 +1616,7 @@ async def _execute_signal(
             if sl_tp_placed:
                 sl_pct_val = abs(sl_price - fill_price) / fill_price * 100
                 tp_placed = []
-                tp_defs = [(tp1, tp1_pct, 0.30, 1), (tp2, tp2_pct, 0.30, 2), (tp3, tp3_pct, 0.40, 3)]
+                tp_defs = [(tp1, tp1_pct, tp1_ratio, 1), (tp2, tp2_pct, tp2_ratio, 2), (tp3, tp3_pct, tp3_ratio, 3)]
                 for tp_price_val, tp_pct_val, tp_ratio_val, tp_tier in tp_defs:
                     tp_placed.append({
                         "tier": tp_tier,
@@ -1708,6 +1750,10 @@ async def _execute_signal(
                 strategy_preset=signal.preset or signal.strategy_id.split("_", 1)[0],
                 support_presets=list(getattr(signal, "supporting_presets", []) or []),
                 entry_reason=entry_reason,
+                stop_loss_price=sl_price if signal.action.startswith("OPEN") else None,
+                take_profit_price=tp3 if signal.action.startswith("OPEN") else None,
+                current_stop=sl_price if signal.action.startswith("OPEN") else None,
+                initial_qty=qty if signal.action.startswith("OPEN") else None,
             )
         except Exception:
             pass

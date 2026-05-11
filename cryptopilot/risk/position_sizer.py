@@ -26,6 +26,7 @@ class PositionSizer:
         stop_loss_pct: float,
         leverage: int | None = None,
         position_pct: float | None = None,
+        risk_pct: float | None = None,
     ) -> float:
         """Calculate position quantity in base asset.
 
@@ -49,7 +50,7 @@ class PositionSizer:
         # Risk-based quantity
         if stop_loss_pct > 0:
             stop_distance = entry_price * stop_loss_pct / 100
-            risk_amount = balance * 1.5 / 100  # 1.5% account risk per trade (balanced altcoin)
+            risk_amount = balance * ((risk_pct or 1.5) / 100)
             risk_qty = risk_amount / stop_distance * lev
         else:
             risk_qty = max_qty

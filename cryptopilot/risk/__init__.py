@@ -5,7 +5,14 @@ from cryptopilot.risk.circuit_breaker import CircuitBreaker
 from cryptopilot.risk.trailing_stop import TrailingStop
 from cryptopilot.risk.profit_locker import ProfitLocker
 from cryptopilot.risk.margin_monitor import MarginMonitor
-from cryptopilot.risk.exit_manager import ExitManager, ExitDecision, ExitAction, TpTierConfig, build_exit_manager_from_config
+from cryptopilot.risk.exit_manager import (
+    ExitManager,
+    ExitDecision,
+    ExitAction,
+    TpTierConfig,
+    build_exit_manager_from_config,
+    build_exit_manager_from_runtime,
+)
 
 __all__ = [
     "PositionSizer",
@@ -18,4 +25,5 @@ __all__ = [
     "ExitAction",
     "TpTierConfig",
     "build_exit_manager_from_config",
+    "build_exit_manager_from_runtime",
 ]
