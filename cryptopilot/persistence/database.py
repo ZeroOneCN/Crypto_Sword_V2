@@ -90,6 +90,7 @@ class Database:
                 "initial_qty": "REAL DEFAULT 0",
                 "take_profit_price": "REAL DEFAULT 0",
                 "stop_loss_price": "REAL DEFAULT 0",
+                "entry_reason": "TEXT DEFAULT ''",
                 "exit_reason": "TEXT DEFAULT ''",
                 "exit_price": "REAL DEFAULT 0",
                 "exit_time": "TEXT DEFAULT ''",

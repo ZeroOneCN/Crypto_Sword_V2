@@ -243,7 +243,8 @@ class OrderExecutor:
     async def create_order(self, req: OrderRequest) -> OrderResult:
         """Submit a new order. Validates precision before sending.
 
-        STOP_MARKET/TAKE_PROFIT_MARKET 路由到 Binance Algo Order API.
+        STOP_MARKET/TAKE_PROFIT_MARKET/STOP/TAKE_PROFIT/TRAILING_STOP_MARKET
+        路由到 Binance Algo Order API (POST /fapi/v1/algoOrder).
         """
         filters = self._symbol_info.get(req.symbol)
         if filters:
@@ -262,32 +263,57 @@ class OrderExecutor:
                 time_in_force=req.time_in_force if req.order_type == "LIMIT" else "GTC",
             )
 
-        is_algo = req.order_type in ("STOP_MARKET", "STOP", "TAKE_PROFIT_MARKET", "TAKE_PROFIT")
-        params = self._build_order_params(req, is_algo=is_algo)
-        # Algo endpoint 目前在 Binance 生产环境不可用, 统一走标准端点
-        raw = await self._signed_request("POST", self._order_endpoint(), params)
+        is_algo = req.order_type in ("STOP_MARKET", "STOP", "TAKE_PROFIT_MARKET", "TAKE_PROFIT", "TRAILING_STOP_MARKET")
+        if is_algo:
+            params = {
+                "algoType": "CONDITIONAL",
+                "symbol": req.symbol,
+                "side": req.side,
+                "type": req.order_type,
+                "quantity": str(req.quantity),
+                "triggerPrice": str(req.stop_price) if req.stop_price else "0",
+                "workingType": "MARK_PRICE",
+                "clientAlgoId": req.client_order_id,
+            }
+            if req.position_side and req.position_side != "BOTH":
+                params["positionSide"] = req.position_side
+            if req.order_type == "TRAILING_STOP_MARKET":
+                params.pop("triggerPrice", None)
+            raw = await self._signed_request("POST", "/fapi/v1/algoOrder", params)
+        else:
+            params = self._build_order_params(req, is_algo=False)
+            raw = await self._signed_request("POST", self._order_endpoint(), params)
         return self._parse_order_result(raw)
 
-    async def cancel_order(self, symbol: str, client_order_id: str) -> bool:
-        """Cancel an open order by client order ID."""
-        params = {
-            "symbol": symbol,
-            "origClientOrderId": client_order_id,
-        }
+    async def cancel_order(self, symbol: str, order_id: str | int, is_algo: bool = False) -> bool:
+        """Cancel an open order by order ID. Set is_algo=True for algo orders."""
+        if is_algo:
+            params = {"symbol": symbol, "algoId": str(order_id)}
+            endpoint = "/fapi/v1/algoOrder"
+        else:
+            params = {
+                "symbol": symbol,
+                "origClientOrderId": str(order_id) if not str(order_id).isdigit() else "",
+                "orderId": str(order_id) if str(order_id).isdigit() else "",
+            }
+            endpoint = self._order_endpoint()
         try:
-            await self._signed_request("DELETE", self._order_endpoint(), params)
+            await self._signed_request("DELETE", endpoint, params)
             return True
         except OrderError:
             return False
 
     async def cancel_all_orders(self, symbol: str) -> bool:
-        """Cancel all open orders for a symbol."""
-        params = {"symbol": symbol}
+        """Cancel all open orders (regular + algo) for a symbol."""
         try:
-            await self._signed_request("DELETE", self._all_open_orders_endpoint(), params)
-            return True
+            await self._signed_request("DELETE", self._all_open_orders_endpoint(), {"symbol": symbol})
         except OrderError:
-            return False
+            pass
+        try:
+            await self._signed_request("DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol})
+        except OrderError:
+            pass
+        return True
 
     async def create_sl_tp_orders(
         self,
@@ -609,6 +635,16 @@ class OrderExecutor:
         raw_orders = await self._signed_request("GET", self._open_orders_endpoint(), params)
         return [self._parse_order_result(o) for o in raw_orders]
 
+    async def get_open_algo_orders(self, symbol: str | None = None) -> list[dict]:
+        """Get all open algo orders (SL/TP conditional orders)."""
+        params: dict = {}
+        if symbol:
+            params["symbol"] = symbol
+        raw = await self._signed_request("GET", "/fapi/v1/openAlgoOrders", params)
+        if not isinstance(raw, list):
+            return []
+        return raw
+
     # ----------------------------------------------------------------
     # Public API — positions / account
     # ----------------------------------------------------------------
@@ -691,7 +727,7 @@ class OrderExecutor:
         params = {"symbol": symbol, "leverage": leverage}
         return await self._signed_request("POST", "/fapi/v1/leverage", params)
 
-    async def set_margin_type(self, symbol: str, margin_type: str = "ISOLATED") -> dict:
+    async def set_margin_type(self, symbol: str, margin_type: str = "CROSSED") -> dict:
         """Set margin type (ISOLATED / CROSSED)."""
         params = {"symbol": symbol, "marginType": margin_type}
         return await self._signed_request("POST", "/fapi/v1/marginType", params)
@@ -703,7 +739,7 @@ class OrderExecutor:
     async def _signed_request(self, method: str, path: str, params: dict) -> dict | list:
         """Send a signed request to the Binance API with retry on transient errors."""
         import asyncio as aio
-        RETRIABLE_CODES = {-1003, -1015, -1016, -1021}
+        RETRIABLE_CODES = {-1015, -1016, -1021}  # -1003(限流/封IP)不重试,避免升级为Ban
         MAX_RETRIES = 3
         BASE_DELAY = 1.0
 
@@ -842,18 +878,20 @@ class OrderExecutor:
         if req.order_type == "LIMIT":
             params["price"] = str(req.price)
             params["timeInForce"] = req.time_in_force
-        if is_algo:
+        if is_algo or req.order_type in ("STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT"):
             params["stopPrice"] = str(req.stop_price)
             params["workingType"] = "MARK_PRICE"
-        if req.reduce_only and not is_algo and not (req.position_side and req.position_side != "BOTH"):
+        if req.reduce_only and not (req.position_side and req.position_side != "BOTH"):
             params["reduceOnly"] = "true"
         return params
 
     def _parse_order_result(self, raw: dict) -> OrderResult:
+        # Algo orders use "algoId" + "clientAlgoId"; standard orders use "orderId" + "clientOrderId"
+        is_algo = "algoId" in raw
         return OrderResult(
             symbol=raw["symbol"],
-            order_id=raw["orderId"],
-            client_order_id=raw.get("clientOrderId", ""),
+            order_id=raw.get("algoId") if is_algo else raw["orderId"],
+            client_order_id=raw.get("clientAlgoId") if is_algo else raw.get("clientOrderId", ""),
             price=float(raw.get("price", 0) or 0),
             orig_qty=float(raw.get("origQty", 0)),
             executed_qty=float(raw.get("executedQty", 0)),

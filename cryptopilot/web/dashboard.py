@@ -171,9 +171,7 @@ async function load(){
       upnl.textContent=fmtUSD(d.unrealized_pnl);
       upnl.style.color=d.unrealized_pnl>=0?'#03904a':'#da291c';
       const mr=document.getElementById('stat_margin');
-      const mrPct=(d.margin_ratio||0)*100;
-      mr.textContent=mrPct.toFixed(2)+'%';
-      mr.style.color=mrPct>80?'#da291c':mrPct>50?'#f6e500':'#03904a';
+      mr.textContent=d.margin_display||((d.margin_ratio||0)*100).toFixed(2)+'%';
       document.getElementById('stat_mtype').textContent=marginLabel(d.margin_type||'cross');
     }
   }catch(e){}
@@ -247,7 +245,7 @@ async function load(){
   try{
     const r=await fetch('/health/positions?_='+Date.now());const d=await r.json();
     if(!d.error&&d.positions&&d.positions.length>0){
-      let html='<div class="scroll-table"><table><tr><th>币种</th><th>方向</th><th>数量</th><th>杠杆</th><th>模式</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th><th>ROI</th><th>强平价</th><th>保护单</th></tr>';
+      let html='<div class="scroll-table"><table><tr><th>币种</th><th>方向</th><th>数量</th><th>杠杆</th><th>模式</th><th>开仓价</th><th>标记价</th><th>未实现盈亏</th><th>ROI</th><th>强平价</th><th>保护单</th><th>预估SL/TP</th></tr>';
       d.positions.forEach(p=>{
         const pnl=parseFloat(p.unrealized_pnl||0);
         const roi=parseFloat(p.roi_pct||0);
@@ -255,10 +253,26 @@ async function load(){
         const lev=p.leverage||1;
         const mtype=p.margin_type||'cross';
         const liq=p.liquidation_price||0;
+        const entry=parseFloat(p.entry_price||0);
+        const qty=parseFloat(p.qty||0);
         const prot=protBySymbol[p.symbol]||{sl:0,tp:0};
         const protHtml=(prot.sl>0||prot.tp>0)
           ?'<span class="badge badge-ok">SL:'+prot.sl+' TP:'+prot.tp+'</span>'
           :'<span class="badge badge-err" style="animation:pulse 1s infinite">裸仓!</span>';
+        // 预估 SL/TP 盈亏
+        const slPrice=parseFloat(p.sl_price||0);
+        const tpPrice=parseFloat(p.tp_price||0);
+        let slPnl=0,tpPnl=0;
+        if(side==='LONG'){
+          slPnl=slPrice>0?(slPrice-entry)*Math.abs(qty):0;
+          tpPnl=tpPrice>0?(tpPrice-entry)*Math.abs(qty):0;
+        }else{
+          slPnl=slPrice>0?(entry-slPrice)*Math.abs(qty):0;
+          tpPnl=tpPrice>0?(entry-tpPrice)*Math.abs(qty):0;
+        }
+        const slPnlHtml=slPrice>0?'<span style="color:#da291c">SL:'+fmtUSD(slPnl)+'</span>':'--';
+        const tpPnlHtml=tpPrice>0?'<span style="color:#03904a">TP:'+fmtUSD(tpPnl)+'</span>':'--';
+        const estPnlHtml=slPnlHtml+' / '+tpPnlHtml;
         html+='<tr>'+
           '<td><strong>'+esc(p.symbol)+'</strong></td>'+
           '<td><span class="badge '+(side==='LONG'?'badge-long':'badge-short')+'">'+side+'</span></td>'+
@@ -270,7 +284,8 @@ async function load(){
           '<td class="'+cn(pnl)+'">'+fmtUSD(pnl)+'</td>'+
           '<td class="'+cn(roi)+'">'+fmtPct(roi)+'</td>'+
           '<td style="color:#da291c">'+(liq>0?fmtNum(liq,5):'--')+'</td>'+
-          '<td>'+protHtml+'</td></tr>';
+          '<td>'+protHtml+'</td>'+
+          '<td class="nowrap">'+estPnlHtml+'</td></tr>';
       });
       html+='</table></div>';
       document.getElementById('positions').innerHTML=html;
@@ -309,7 +324,7 @@ async function load(){
         let dirBadge='<span class="badge badge-info">HOLD</span>';
         if(c.direction==='LONG')dirBadge='<span class="badge badge-long">LONG</span>';
         else if(c.direction==='SHORT')dirBadge='<span class="badge badge-short">SHORT</span>';
-        const totalScore=c.total_score||c.score||0;
+        const totalScore=c.composite_score||c.total_score||c.score||0;
         html+='<tr><td><strong style="color:#ffffff">'+esc(c.symbol)+'</strong></td>'+
           '<td>'+fmtNum(c.price,4)+'</td>'+
           '<td class="'+changeCls+'">'+fmtPct(c.change_24h)+'</td>'+

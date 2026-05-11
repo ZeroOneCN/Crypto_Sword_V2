@@ -47,7 +47,7 @@ class EventData:
     symbol: str = ""
     strategy_id: str = ""
 
-    margin_type: str = "ISOLATED"     # 保证金模式: ISOLATED(逐仓) / CROSSED(全仓)
+    margin_type: str = "CROSSED"     # 保证金模式: ISOLATED(逐仓) / CROSSED(全仓)
 
     # 开仓
     price: float = 0.0
@@ -55,6 +55,7 @@ class EventData:
     leverage: int = 0
     score: float = 0.0                    # 综合评分
     top_factors: list[str] = field(default_factory=list)  # 前3贡献因子
+    entry_reason: str = ""                 # 开仓原因 (因子标签)
     sl_price: float = 0.0
     tp_tiers: list[dict] = field(default_factory=list)    # [{pct, price, qty_ratio}]
 
@@ -123,7 +124,8 @@ class Notifier:
         top_factors: list[str] | None = None,
         sl_price: float = 0.0,
         tp_tiers: list[dict] | None = None,
-        margin_type: str = "ISOLATED",
+        margin_type: str = "CROSSED",
+        entry_reason: str = "",
     ) -> None:
         """开仓通知 — V2 多因子评分+保护单."""
         direction = "📈 做多" if side == "LONG" else "📉 做空"
@@ -139,6 +141,7 @@ class Notifier:
             sl_price=sl_price,
             tp_tiers=tp_tiers or [],
             margin_type=margin_type,
+            entry_reason=entry_reason,
         ))
 
     def position_closed(
@@ -150,6 +153,7 @@ class Notifier:
         pnl_pct: float = 0.0,
         exit_reason: str = "",
         hold_duration: str = "",
+        entry_reason: str = "",
     ) -> None:
         """平仓通知 — 带上退出原因和持仓时长."""
         pnl_emoji = "🟢" if pnl >= 0 else "🔴"
@@ -163,6 +167,7 @@ class Notifier:
             pnl_pct=pnl_pct,
             exit_reason=exit_reason,
             hold_duration=hold_duration,
+            entry_reason=entry_reason,
         ))
 
     def protection_placed(

@@ -378,6 +378,9 @@ class StrategyEngine:
                         # 记录信号日志 (供 Web 展示)
                         try:
                             from cryptopilot.web.health import add_signal_log
+                            from cryptopilot.strategy.scoring import FACTOR_CN
+                            top_names = [f.name for f in top3] if top3 else []
+                            factor_labels_cn = [FACTOR_CN.get(n, n) for n in top_names]
                             add_signal_log({
                                 "time": __import__("datetime").datetime.now(
                                     __import__("datetime").timezone.utc).isoformat(),
@@ -385,6 +388,7 @@ class StrategyEngine:
                                 "action": best_signal.action,
                                 "score": round(best_score, 1),
                                 "detail": best_signal.comment,
+                                "factor_labels_cn": factor_labels_cn,
                             })
                         except Exception:
                             pass

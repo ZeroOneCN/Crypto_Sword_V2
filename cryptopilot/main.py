@@ -556,7 +556,7 @@ async def main() -> None:
                 market_cap_fetcher=mcap_fetcher,
                 rest_data=rest_data,
                 special_signals=special_signals,
-                scan_interval=5.0,
+                scan_interval=10.0,
                 top_k=3,
                 max_signals_per_cycle=1,  # 每轮仅最强信号
                 buy_threshold=buy_threshold,
@@ -1144,7 +1144,7 @@ async def _execute_signal(
         # Set leverage on exchange before opening
         try:
             await executor.set_leverage(signal.symbol, default_leverage)
-            await executor.set_margin_type(signal.symbol, "ISOLATED")
+            await executor.set_margin_type(signal.symbol, "CROSSED")
         except Exception:
             logger.debug(f"杠杆/保证金设置跳过 {signal.symbol} (可能已设置或不支持)", exc_info=True)
 
@@ -1232,6 +1232,7 @@ async def _execute_signal(
 
         # 🆕 V2 多因子开仓通知
         factor_labels = [f"{name}" for name, direction, s in (signal.top_factors or [])]
+        entry_reason = ",".join(label for label in factor_labels[:3]) if factor_labels else "SCORE_TRIGGER"
         notifier.position_opened(
             symbol=signal.symbol,
             side=pos_side,
@@ -1242,7 +1243,8 @@ async def _execute_signal(
             top_factors=factor_labels,
             sl_price=0.0,  # 后面填
             tp_tiers=[],   # 后面填
-            margin_type="ISOLATED",
+            margin_type="CROSSED",
+            entry_reason=entry_reason,
         )
 
         # 记录开仓时间 (用于平仓通知计算持仓时长)
@@ -1382,9 +1384,21 @@ async def _execute_signal(
                 hold_dur = f"{h}h{m:02d}m"
 
         # 推断退出原因
-        exit_reason = "SIGNAL"  # 默认
-        if signal.action in ("CLOSE_LONG", "CLOSE_SHORT"):
-            exit_reason = "MANUAL" if "manual" in (signal.comment or "").lower() else "SIGNAL"
+        if signal.action.startswith("CLOSE"):
+            reason = signal.comment or ""
+            if "sl" in reason.lower() or "stop" in reason.lower():
+                exit_reason = "SL_HIT"
+            elif "tp" in reason.lower() or "profit" in reason.lower():
+                exit_reason = "TP_HIT"
+            elif "manual" in reason.lower():
+                exit_reason = "MANUAL"
+            else:
+                exit_reason = "SIGNAL_CLOSE"
+        else:
+            exit_reason = "MARKET_CLOSE"
+
+        # 获取开仓原因
+        pos_entry_reason = pos.get("entry_reason", "") if pos else ""
 
         notifier.position_closed(
             symbol=signal.symbol,
@@ -1394,12 +1408,19 @@ async def _execute_signal(
             pnl_pct=pnl_pct,
             exit_reason=exit_reason,
             hold_duration=hold_dur,
+            entry_reason=pos_entry_reason,
         )
 
     logger.info(f"订单已执行: {result.status} {side} {qty} {signal.symbol} [id={result.order_id}]")
 
-    # Sync positions
+    # Sync positions — then stamp entry_reason for newly opened position
     await position_manager.sync_from_exchange(executor)
+    # Save entry_reason to DB (sync_from_exchange clears metadata on new positions)
+    if signal.action.startswith("OPEN") and entry_reason:
+        try:
+            await position_manager.set_entry_reason(signal.symbol, entry_reason)
+        except Exception:
+            pass
 
 
 def _calc_pnl(position_manager, symbol: str, close_price: float, qty: float) -> float:

@@ -27,6 +27,10 @@ class PositionManager:
             sym = pos.symbol
             active_symbols.add(sym)
 
+            # Preserve local metadata (entry_reason) from existing DB record
+            existing = self._positions.get(sym, {})
+            entry_reason = existing.get("entry_reason", "")
+
             rec = PositionRecord(
                 symbol=pos.symbol,
                 side=pos.position_side,
@@ -36,6 +40,7 @@ class PositionManager:
                 leverage=pos.leverage,
                 liquidation_price=pos.liquidation_price,
                 unrealized_pnl=pos.unrealized_pnl,
+                entry_reason=entry_reason,
             )
             await self._repo.upsert(rec)
             row = await self._repo.get_by_symbol(sym)
@@ -60,6 +65,18 @@ class PositionManager:
         """Check if we hold a position in this symbol."""
         pos = self._positions.get(symbol)
         return pos is not None and abs(pos.get("qty", 0)) > 0
+
+    async def set_entry_reason(self, symbol: str, reason: str) -> None:
+        """Set the entry_reason for an existing position in cache + DB."""
+        pos = self._positions.get(symbol)
+        if pos is not None:
+            pos["entry_reason"] = reason
+            try:
+                from cryptopilot.persistence.models import PositionRecord
+                rec = PositionRecord(**{k: v for k, v in pos.items() if k in PositionRecord.__dataclass_fields__})
+                await self._repo.upsert(rec)
+            except Exception:
+                logger.debug(f"无法保存 entry_reason for {symbol}")
 
     @property
     def position_count(self) -> int:

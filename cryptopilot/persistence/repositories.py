@@ -160,7 +160,7 @@ class PositionRepository:
                    highest_price=?, lowest_price=?, current_stop=?,
                    sideways_defense_moved=?, sideways_start_ts=?,
                    initial_qty=?, take_profit_price=?, stop_loss_price=?,
-                   exit_reason=?, exit_price=?, exit_time=?, pnl=?, pnl_pct=?,
+                   entry_reason=?, exit_reason=?, exit_price=?, exit_time=?, pnl=?, pnl_pct=?,
                    updated_at=?
                    WHERE symbol=? AND side=?""",
                 (pos.qty, pos.entry_price, pos.mark_price, pos.leverage,
@@ -169,7 +169,7 @@ class PositionRepository:
                  pos.highest_price, pos.lowest_price, pos.current_stop,
                  pos.sideways_defense_moved, pos.sideways_start_ts,
                  pos.initial_qty, pos.take_profit_price, pos.stop_loss_price,
-                 pos.exit_reason, pos.exit_price, pos.exit_time, pos.pnl, pos.pnl_pct,
+                 pos.entry_reason, pos.exit_reason, pos.exit_price, pos.exit_time, pos.pnl, pos.pnl_pct,
                  now, pos.symbol, pos.side),
             )
         else:
@@ -182,9 +182,9 @@ class PositionRepository:
                    highest_price, lowest_price, current_stop,
                    sideways_defense_moved, sideways_start_ts,
                    initial_qty, take_profit_price, stop_loss_price,
-                   exit_reason, exit_price, exit_time, pnl, pnl_pct,
+                   entry_reason, exit_reason, exit_price, exit_time, pnl, pnl_pct,
                    created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (pos.symbol, pos.side, pos.qty, pos.entry_price,
                  pos.mark_price, pos.leverage, pos.liquidation_price,
                  pos.unrealized_pnl,
@@ -192,7 +192,7 @@ class PositionRepository:
                  pos.highest_price, pos.lowest_price, pos.current_stop,
                  pos.sideways_defense_moved, pos.sideways_start_ts,
                  pos.initial_qty, pos.take_profit_price, pos.stop_loss_price,
-                 pos.exit_reason, pos.exit_price, pos.exit_time, pos.pnl, pos.pnl_pct,
+                 pos.entry_reason, pos.exit_reason, pos.exit_price, pos.exit_time, pos.pnl, pos.pnl_pct,
                  pos.created_at, pos.updated_at),
             )
 

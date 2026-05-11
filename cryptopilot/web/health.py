@@ -212,7 +212,7 @@ def create_health_app(
 
     @app.get("/health/positions")
     async def health_positions():
-        """Return current open positions with enhanced data."""
+        """Return current open positions with enhanced data (SL/TP prices)."""
         if position_manager is None:
             return {"error": "Position manager not available"}
         positions = position_manager.get_all_positions()
@@ -229,6 +229,8 @@ def create_health_app(
                     pos.setdefault("margin_type", "cross")
                     pos.setdefault("liquidation_price", 0.0)
                     pos.setdefault("notional", 0.0)
+                    pos.setdefault("sl_price", 0.0)
+                    pos.setdefault("tp_price", 0.0)
                     for ep in exchange_positions:
                         if ep.symbol == sym:
                             pos["mark_price"] = ep.mark_price
@@ -243,6 +245,44 @@ def create_health_app(
                                 )
                             pos["notional"] = round(abs(ep.quantity) * ep.mark_price, 2)
                             break
+
+                # 获取所有挂单 (含 algo) 以提取 SL/TP 价格
+                try:
+                    all_orders = await order_executor.get_open_orders()
+                    algo_orders = await order_executor.get_open_algo_orders()
+                except Exception:
+                    all_orders = []
+                    algo_orders = []
+
+                for pos in positions:
+                    sym = pos.get("symbol", "")
+                    sl_price = 0.0
+                    tp_price = 0.0
+                    # 遍历普通挂单
+                    for o in all_orders:
+                        if o.symbol != sym:
+                            continue
+                        if o.order_type in ("STOP_MARKET", "STOP", "STOP_LOSS"):
+                            if sl_price == 0.0:
+                                sl_price = float(o.stop_price or o.price or 0)
+                        elif o.order_type in ("TAKE_PROFIT_MARKET", "TAKE_PROFIT"):
+                            if tp_price == 0.0:
+                                tp_price = float(o.price or o.stop_price or 0)
+                    # 遍历 algo orders
+                    for ao in algo_orders:
+                        if ao.get("symbol", "") != sym:
+                            continue
+                        otype = ao.get("type", ao.get("orderType", ""))
+                        if otype in ("STOP_MARKET", "STOP"):
+                            sp = float(ao.get("stopPrice", 0) or 0)
+                            if sl_price == 0.0 and sp > 0:
+                                sl_price = sp
+                        elif otype in ("TAKE_PROFIT_MARKET", "TAKE_PROFIT"):
+                            tp = float(ao.get("price", ao.get("stopPrice", 0)) or 0)
+                            if tp_price == 0.0 and tp > 0:
+                                tp_price = tp
+                    pos["sl_price"] = round(sl_price, 5) if sl_price > 0 else 0.0
+                    pos["tp_price"] = round(tp_price, 5) if tp_price > 0 else 0.0
         except Exception:
             pass
 
@@ -253,7 +293,7 @@ def create_health_app(
 
     @app.get("/health/orders")
     async def health_orders():
-        """返回当前挂单状态 (含 SL/TP 保护单统计)."""
+        """返回当前挂单状态 (含 SL/TP 保护单统计 + algo orders)."""
         if order_executor is None:
             return {"error": "订单执行器不可用"}
         try:
@@ -278,13 +318,48 @@ def create_health_app(
                     "type": o.order_type,
                     "side": o.side,
                     "price": o.price,
-                    "stop_price": o.stop_price,
+                    "stop_price": getattr(o, "stop_price", 0),
                     "qty": o.orig_qty,
                     "status": o.status,
                 })
+
+            # 同时查询 algo orders (Binance 条件单)
+            total_algo_orders = 0
+            try:
+                algo_orders = await order_executor.get_open_algo_orders()
+                for ao in algo_orders:
+                    sym = ao.get("symbol", "")
+                    if sym not in by_symbol:
+                        by_symbol[sym] = {
+                            "symbol": sym,
+                            "total": 0, "stop_orders": 0, "tp_orders": 0,
+                            "orders": [],
+                        }
+                    info = by_symbol[sym]
+                    otype = ao.get("type", ao.get("orderType", ""))
+                    if otype in ("STOP_MARKET", "STOP"):
+                        info["stop_orders"] += 1
+                        info["total"] += 1
+                    elif otype in ("TAKE_PROFIT_MARKET", "TAKE_PROFIT", "LIMIT"):
+                        info["tp_orders"] += 1
+                        info["total"] += 1
+                    total_algo_orders += 1
+                    info["orders"].append({
+                        "type": otype,
+                        "side": ao.get("side", ""),
+                        "price": float(ao.get("price", 0) or 0),
+                        "stop_price": float(ao.get("stopPrice", 0) or 0),
+                        "qty": float(ao.get("origQty", ao.get("quantity", 0)) or 0),
+                        "status": ao.get("algoStatus", ao.get("status", "")),
+                        "algo": True,
+                    })
+            except Exception:
+                logger.debug("Algo orders fetch skipped")
+
             return {
-                "total": len(open_orders),
+                "total": len(open_orders) + total_algo_orders,
                 "by_symbol": list(by_symbol.values()),
+                "total_algo_orders": total_algo_orders,
             }
         except Exception as exc:
             logger.exception("health endpoint failed")
@@ -442,11 +517,18 @@ def create_health_app(
             return {"error": "订单执行器不可用"}
         try:
             acct = await order_executor.get_account_info()
+            mr = acct.margin_ratio or 0
+            # margin_display: 0 或接近 0 表示全仓共享模式
+            if mr <= 0.0001:
+                margin_display = "全仓(共享)"
+            else:
+                margin_display = f"{mr * 100:.2f}%"
             return {
                 "total_balance": round(acct.total_balance, 2),
                 "available_balance": round(acct.available_balance, 2),
                 "unrealized_pnl": round(acct.unrealized_pnl, 2),
                 "margin_ratio": round(acct.margin_ratio, 4),
+                "margin_display": margin_display,
                 "margin_type": acct.margin_type or (
                     "cross"  # Binance 默认全仓
                 ),
@@ -602,7 +684,7 @@ def create_health_app(
 
     @app.get("/health/scoring-detail")
     async def health_scoring_detail():
-        """返回候选池 Top-K 的因子评分明细."""
+        """返回候选池 Top-K 的因子评分明细 (含中文因子标签)."""
         if candidate_pool is None:
             return {"error": "候选池不可用"}
         candidates = await candidate_pool.get_all()
@@ -612,9 +694,17 @@ def create_health_app(
         result = []
         for cand in sorted(candidates, key=lambda c: c.scanner_score, reverse=True)[:5]:
             factors_info = []
+            factor_labels_cn = []
+            composite_score = 0.0
+            direction = "HOLD"
+            confidence = 0.0
             if scoring_engine:
                 try:
+                    from cryptopilot.strategy.scoring import FACTOR_CN
                     sr = scoring_engine.score(cand)
+                    composite_score = round(sr.total_score, 1)
+                    direction = sr.direction
+                    confidence = round(sr.confidence, 2)
                     factors_info = [
                         {
                             "name": fs.name,
@@ -625,6 +715,7 @@ def create_health_app(
                         }
                         for fs in sr.factors
                     ]
+                    factor_labels_cn = [FACTOR_CN.get(fs.name, fs.name) for fs in sr.factors]
                 except Exception:
                     pass
             result.append({
@@ -632,9 +723,13 @@ def create_health_app(
                 "price": round(cand.current_price, 4),
                 "change_24h": round(cand.change_24h_pct, 2),
                 "scanner_score": round(cand.scanner_score, 1),
+                "composite_score": composite_score,
+                "direction": direction,
+                "confidence": confidence,
                 "factors": factors_info,
+                "factor_labels_cn": factor_labels_cn,
             })
-        return {"candidates": result, "preset": preset_name}
+        return {"candidates": result, "preset": preset_name, "factor_labels_cn": {}}
 
     @app.get("/health/logs")
     async def health_logs(lines: int = 50):

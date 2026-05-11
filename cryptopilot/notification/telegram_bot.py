@@ -296,7 +296,7 @@ class TelegramBot:
 
     def _margin_label(self, margin_type: str) -> str:
         """保证金模式标签."""
-        return "🔒 逐仓" if margin_type == "ISOLATED" else "🌐 全仓"
+        return "🔒 逐仓" if margin_type.lower() == "isolated" else "🌐 全仓"
 
     def _exit_reason_label(self, reason: str) -> str:
         labels = {

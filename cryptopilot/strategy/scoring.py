@@ -10,6 +10,14 @@ from cryptopilot.strategy.factors.base import FactorBase, FactorScore
 from cryptopilot.strategy.factors import FACTOR_REGISTRY
 from cryptopilot.strategy.scanner import Candidate
 
+# 因子中文标签 (供仪表盘/通知使用)
+FACTOR_CN = {
+    "market_cap": "市值", "sideways": "横盘", "oi": "持仓量",
+    "funding": "费率", "volume": "量能", "atr": "波动率",
+    "ma": "均线", "rsi": "RSI", "bollinger": "布林",
+    "sentiment": "情绪", "anomaly": "异常", "dark_flow": "暗流",
+}
+
 # 导入所有因子模块以触发 register_factor
 import cryptopilot.strategy.factors.ma_factor          # noqa
 import cryptopilot.strategy.factors.rsi_factor         # noqa
