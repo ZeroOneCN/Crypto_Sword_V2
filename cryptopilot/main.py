@@ -584,24 +584,55 @@ async def main() -> None:
 
     # Wire Telegram commands to strategy engine
     async def get_status_text() -> str:
+        """V1 风格系统状态."""
+        from datetime import datetime, timezone
+        now_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         statuses = strategy_engine.get_status()
+        ws = data_cache.all_tickers()
+        pool_size = candidate_pool.size if candidate_pool else 0
+        pos_count = position_manager.position_count
+        cb_tripped = circuit_breaker.tripped if circuit_breaker else False
+        margin_display = "全仓(共享)"
+        total_balance = available_balance = unrealized_pnl = 0.0
+        try:
+            acct = await order_executor.get_account_info()
+            total_balance = acct.total_balance
+            available_balance = acct.available_balance
+            unrealized_pnl = acct.unrealized_pnl
+            if acct.margin_ratio > 0.0001:
+                margin_display = f"{acct.margin_ratio * 100:.2f}%"
+        except Exception:
+            pass
+
         lines = [
-            f"Strategies ({strategy_engine.active_count}/{strategy_engine.total_count} active):"
+            f"📊 <b>宙斯交易中枢 | 系统状态</b>",
+            f"🕒 <code>{now_str} UTC</code>",
+            SEP,
+            f"💵 <b>余额</b>: {total_balance:.2f} USDT | 可用 {available_balance:.2f}",
+            f"📈 <b>浮动盈亏</b>: {unrealized_pnl:+.2f} USDT",
+            f"🛡️ <b>保证金</b>: {margin_display}",
+            "",
+            f"🔍 <b>行情</b>: {len(ws)} 币种 | 候选池 {pool_size}",
+            f"📊 <b>持仓</b>: {pos_count} / {cfg.risk.max_positions}",
+            f"⚡ <b>风控</b>: {'🟢 正常' if not cb_tripped else '🔴 已熔断'}",
+            f"📡 <b>行情源</b>: {'WebSocket' if not use_rest_poller else 'REST'}",
+            "",
+            f"<b>活跃策略</b> ({strategy_engine.active_count}/{strategy_engine.total_count}):",
         ]
-        for s in statuses:
-            lines.append(
-                f"  {s['strategy_id']} — {s['symbol']} "
-                f"{'[PAUSED]' if s['paused'] else '[RUNNING]'} "
-                f"{'[POS]' if s['has_position'] else ''}"
-            )
+        for s in statuses[:8]:
+            state = '⏸' if s.get('paused') else '▶'
+            pos_tag = ' [持仓]' if s.get('has_position') else ''
+            lines.append(f"  {state} <b>{s.get('strategy_id','?')}</b> — {s.get('symbol','?')}{pos_tag}")
+        lines.append(SEP)
+        lines.append("✅ 系统正常运行" if not cb_tripped else "⚠️ 熔断中，暂停开仓")
         return "\n".join(lines)
 
     async def get_positions_text() -> str:
-        """V2 持仓明细 (用于 Telegram /positions 命令)."""
+        """V1 风格持仓明细."""
         positions = position_manager.get_all_positions()
         if not positions:
-            return "📭 当前无持仓"
-        lines = [f"📊 <b>持仓明细</b> ({len(positions)} 个)\n"]
+            return "📭 <b>宙斯交易中枢 | 持仓明细</b>\n" + SEP + "\n当前无持仓，系统待命。"
+        lines = [f"📊 <b>宙斯交易中枢 | 持仓明细</b> ({len(positions)} 个)", SEP]
         for p in positions:
             sym = p.get("symbol", "?")
             side = "📈 LONG" if p.get("side") == "LONG" else "📉 SHORT"
@@ -609,24 +640,36 @@ async def main() -> None:
             entry = float(p.get("entry_price", 0) or 0)
             mark = float(p.get("mark_price", 0) or 0)
             pnl = float(p.get("unrealized_pnl", 0) or 0)
-            roi = ((mark - entry) / entry * 100) if entry > 0 else 0
+            lev = p.get("leverage", 1)
+            roi = ((mark - entry) / entry * 100 * lev) if entry > 0 else 0
             if side == "📉 SHORT":
                 roi = -roi
+            pnl_emoji = "🟢" if pnl >= 0 else "🔴"
             lines.append(
-                f"<b>{sym}</b> {side}  {qty}\n"
-                f"  入场: {entry:.5f} | 标记: {mark:.5f}\n"
-                f"  浮动: ${pnl:+.2f} ({roi:+.2f}%)"
+                f"<b>{sym}</b> {side} · {lev}x\n"
+                f"  入场: <code>{entry:.5f}</code> → 标记: <code>{mark:.5f}</code>\n"
+                f"  数量: {qty} | 未实现: {pnl_emoji} <code>${pnl:+.2f}</code> ({roi:+.2f}% ROI)\n"
             )
             # 保护单状态
-            orders = order_manager.get_open_orders(sym)
+            try:
+                orders = order_manager.get_open_orders(sym)
+            except Exception:
+                orders = []
             if orders:
-                sls = [o for o in orders if o.get("type") == "STOP_MARKET"]
-                tps = [o for o in orders if o.get("type") in ("TAKE_PROFIT_MARKET", "LIMIT")]
+                sls = [o for o in orders if o.get("type") in ("STOP_MARKET", "STOP")]
+                tps = [o for o in orders if o.get("type") in ("TAKE_PROFIT_MARKET", "LIMIT", "TAKE_PROFIT")]
                 if sls:
-                    lines.append(f"  🛑 SL: {sls[0].get('stop_price', '?'):.5f}")
+                    sl_price = sls[0].get("stop_price") or sls[0].get("price", 0)
+                    lines.append(f"  🛑 SL: <code>{float(sl_price):.5f}</code>")
                 if tps:
-                    tp_str = " ".join([f"TP{o.get('client_order_id','?')[-3:]}:{o.get('price') or o.get('stop_price'):.5f}" for o in tps[:3]])
-                    lines.append(f"  🎯 {tp_str}")
+                    tp_strs = []
+                    for o in tps[:3]:
+                        tp_price = o.get("price") or o.get("stop_price", 0)
+                        tp_strs.append(f"TP{o.get('client_order_id','?')[-2:]}:<code>{float(tp_price):.5f}</code>")
+                    lines.append(f"  🎯 {' · '.join(tp_strs)}")
+            else:
+                lines.append(f"  ⚠️ 无保护单")
+            lines.append("")
         return "\n".join(lines)
 
     telegram.set_callbacks(
@@ -649,6 +692,42 @@ async def main() -> None:
         notifier.register(Events.STRATEGY_ERROR, telegram.on_event)
         notifier.register(Events.WARNING, telegram.on_event)
         notifier.register(Events.DAILY_REPORT, telegram.on_event)
+
+        # V1 风格启动通知
+        from datetime import datetime, timezone
+        now_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        sc = cfg.scoring
+        risk_cfg = cfg.risk
+        preset = raw_cfg.get("scoring", {}).get("active_preset", "composite")
+        lev = risk_cfg.default_leverage
+        risk_pct = risk_cfg.risk_per_trade
+        max_pos = risk_cfg.max_positions
+        rl = "进取" if risk_pct >= 1.0 else "稳健"
+        src = "WebSocket 实时" if not use_rest_poller else f"REST {poll_interval}s"
+        tp_mode = raw_cfg.get("trading", {}).get("tp_mode", "ROI")
+
+        startup_msg = (
+            f"🚀 <b>宙斯交易中枢 | 系统启动</b>\n"
+            f"🕒 <code>{now_str}</code>\n"
+            f"\n"
+            f"🔥 <b>风险等级</b>: <code>{rl}</code>\n"
+            f"\n"
+            f"💵 <b>模式</b>: <code>{'🟢 LIVE' if not cfg.exchange.testnet else '🟡 TESTNET'}</code>\n"
+            f"⚙️ <b>杠杆</b>: <code>{lev}x</code>\n"
+            f"🎯 <b>单笔风险</b>: <code>{risk_pct:.2f}%</code>\n"
+            f"\n"
+            f"🛑 <b>止损</b>: <code>{risk_cfg.stop_loss_pct:.1f}%</code>\n"
+            f"📈 <b>止盈</b>: <code>{risk_cfg.take_profit_pct:.1f}% {tp_mode}</code>\n"
+            f"\n"
+            f"🔍 <b>扫描范围</b>: <code>{sc.scan_top_n}</code> 币种\n"
+            f"⏱ <b>扫描间隔</b>: <code>{sc.scan_interval_sec}</code> 秒\n"
+            f"📛 <b>最大持仓</b>: <code>{max_pos}</code>\n"
+            f"📊 <b>策略预设</b>: <code>{preset}</code>\n"
+            f"📡 <b>行情源</b>: <code>{src}</code>\n"
+            f"{SEP}\n"
+            f"✅ 系统已就绪"
+        )
+        await telegram.send_message(startup_msg)
 
     # ---- Market data -> Strategy dispatch ----
     # Subscribe the strategy engine to market data updates
