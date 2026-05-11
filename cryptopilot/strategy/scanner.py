@@ -67,6 +67,14 @@ class MarketScanner:
             f"扫描器已启动 (间隔={self._interval}s, 最低分={self._min_score}, "
             f"最大扫描数={self._max_scan})"
         )
+        # 等待行情数据就绪 (WebSocket 可能尚未连接)
+        for wait_i in range(30):
+            if len(self._cache.all_tickers()) > 10:
+                logger.info(f"行情数据就绪: {len(self._cache.all_tickers())} 币种, 开始扫描")
+                break
+            await asyncio.sleep(2)
+        else:
+            logger.warning("等待行情数据超时 (60s), 继续启动")
         heartbeat = 0
         while self._running:
             try:

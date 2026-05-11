@@ -508,7 +508,10 @@ def create_health_app(
                     "volume_ratio": round(c.volume_ratio, 1),
                     "oi_change": round(c.oi_change_pct, 1),
                     "funding_rate": f"{c.funding_rate*100:.4f}%",
-                    "score": round(c.scanner_score, 1),
+                    "scanner_score": round(c.scanner_score, 1),
+                    "composite_score": round(c.scanner_score, 1),
+                    "direction": "HOLD",
+                    "confidence": 0.0,
                     "reasons": c.scrape_reasons,
                 }
                 for c in candidates
