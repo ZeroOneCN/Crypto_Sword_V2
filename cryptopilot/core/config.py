@@ -60,7 +60,10 @@ class RiskConfig(BaseModel):
     max_position_pct: float = 20.0
     max_leverage: int = 10
     default_leverage: int = 3
-    trailing_distance_pct: float = 1.5
+    risk_per_trade: float = 1.5
+    stop_loss_pct: float = 12.0
+    take_profit_pct: float = 25.0
+    trailing_distance_pct: float = 8.0
     trailing_activation_pct: float = 0.5
 
 
@@ -86,6 +89,8 @@ class ScoringConfig(BaseModel):
     buy_threshold: float = 50.0
     sell_threshold: float = -50.0
     min_confidence: float = 0.5
+    scan_top_n: int = 100
+    scan_interval_sec: int = 300
     tp_tiers: TpTiersConfig = Field(default_factory=TpTiersConfig)
 
 

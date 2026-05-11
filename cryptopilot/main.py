@@ -32,6 +32,11 @@ async def main() -> None:
     logger.info(f"交易所: {'测试网' if cfg.exchange.testnet else '实盘'}, {cfg.exchange.trading_type}")
     logger.info("=" * 60)
 
+    # 启动冷却: 避免继承前次 IP 封禁的残留限流
+    import time as _time
+    _time.sleep(5)
+    logger.info("启动冷却完成 (5s)")
+
     # ---- Security ----
     from cryptopilot.security.encryptor import Encryptor, KEY_FILE
 
