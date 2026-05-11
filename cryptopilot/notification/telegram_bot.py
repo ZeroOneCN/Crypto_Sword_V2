@@ -78,6 +78,15 @@ def _margin_label(mt: str) -> str:
     return "🔒 逐仓" if (mt or "").lower() == "isolated" else "🌐 全仓"
 
 
+def _preset_label(preset: str) -> str:
+    labels = {
+        "ambush": "ambush",
+        "chase": "chase",
+        "composite": "composite",
+    }
+    return labels.get((preset or "").strip().lower(), preset or "--")
+
+
 class TelegramBot:
     """V2 Telegram 机器人 — raw httpx, no PTB dependency."""
 
@@ -424,6 +433,15 @@ class TelegramBot:
             strategy = data.extra.get("strategy_line", "")
             if strategy:
                 parts.append(f"🧭 <b>策略</b>: <code>{_html_esc(str(strategy))}</code>")
+            preset = data.extra.get("strategy_preset", "")
+            if preset:
+                parts.append(f"🧩 <b>预设</b>: <code>{_html_esc(_preset_label(str(preset)))}</code>")
+            support = data.extra.get("support_presets", []) or []
+            if support:
+                parts.append(f"🪢 <b>支持</b>: <code>{_html_esc(', '.join(str(x) for x in support))}</code>")
+            opportunity = data.extra.get("opportunity_type", "")
+            if opportunity:
+                parts.append(f"🎯 <b>机会</b>: <code>{_html_esc(str(opportunity))}</code>")
 
         if data.score > 0:
             label = _score_label(data.score)
@@ -501,6 +519,13 @@ class TelegramBot:
 
         if data.extra and data.extra.get("strategy_line"):
             parts.append(f"🧭 <b>策略</b>: <code>{_html_esc(str(data.extra['strategy_line']))}</code>")
+        if data.extra and data.extra.get("strategy_preset"):
+            parts.append(f"🧩 <b>预设</b>: <code>{_html_esc(_preset_label(str(data.extra['strategy_preset'])))}</code>")
+        if data.extra and data.extra.get("support_presets"):
+            support = data.extra.get("support_presets") or []
+            parts.append(f"🪢 <b>支持</b>: <code>{_html_esc(', '.join(str(x) for x in support))}</code>")
+        if data.extra and data.extra.get("opportunity_type"):
+            parts.append(f"🎯 <b>机会</b>: <code>{_html_esc(str(data.extra['opportunity_type']))}</code>")
 
         parts.append(SEP)
         if pnl >= 0:

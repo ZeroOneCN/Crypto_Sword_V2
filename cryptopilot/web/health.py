@@ -612,22 +612,31 @@ def create_health_app(
             "total_pnl_pct": round(report.total_pnl_pct, 2),
             "avg_win": round(report.avg_win, 2),
             "avg_loss": round(report.avg_loss, 2),
+            "avg_hold_time_seconds": round(report.avg_hold_time_seconds, 1),
             "profit_factor": round(report.profit_factor, 2) if report.profit_factor != float("inf") else None,
             "max_drawdown_pct": round(report.max_drawdown_pct, 1),
             "sharpe_ratio": round(report.sharpe_ratio, 2),
             "start_balance": round(report.start_balance, 2),
             "current_balance": round(report.current_balance, 2),
+            "strategies": report.strategies,
             "trades": [
                 {
                     "symbol": t.symbol,
+                    "side": t.side,
+                    "strategy": t.strategy,
                     "entry_price": round(t.entry_price, 4),
                     "exit_price": round(t.exit_price, 4),
                     "pnl": round(t.pnl, 2),
                     "pnl_pct": round(t.pnl_pct, 2),
                     "opened_at": t.opened_at,
+                    "closed_at": t.closed_at,
+                    "hold_seconds": round(t.hold_seconds, 1),
+                    "exit_reason": t.exit_reason,
+                    "tp_tiers_hit": t.tp_tiers_hit,
                 }
                 for t in report.trades[-20:]  # Last 20 trades
             ],
+            "daily_pnl": report.daily_pnl[-30:],
             "generated_at": report.generated_at,
         }
 
@@ -677,6 +686,8 @@ def create_health_app(
                     "funding_rate": f"{c.funding_rate*100:.4f}%",
                     "scanner_score": round(c.scanner_score, 1),
                     "composite_score": round(c.composite_score, 1),
+                    "preset_scores": getattr(c, "preset_scores", {}),
+                    "strategy_scores": getattr(c, "strategy_scores", {}),
                     "direction": c.direction,
                     "confidence": c.confidence,
                     "reasons": c.scrape_reasons,
@@ -875,7 +886,13 @@ def create_health_app(
                 ORDER BY f.filled_at DESC
                 LIMIT 50
             """)
-            return {"total": len(rows), "trades": [dict(r) for r in rows]}
+            trades = []
+            for row in rows:
+                item = dict(row)
+                item["strategy_id"] = item.get("strategy_name", "")
+                item["preset"] = str(item.get("strategy_name", "") or "").split("_", 1)[0]
+                trades.append(item)
+            return {"total": len(trades), "trades": trades}
         except Exception as exc:
             logger.exception("health endpoint failed")
             return {"error": "Internal server error"}
@@ -969,7 +986,15 @@ def create_health_app(
     @app.get("/health/signals")
     async def health_signals():
         """返回最近信号日志."""
-        return {"total": len(_signal_log), "signals": list(_signal_log[-50:])}
+        signals = []
+        for item in list(_signal_log[-50:]):
+            entry = dict(item)
+            entry.setdefault("preset", "")
+            entry.setdefault("strategy_id", "")
+            entry.setdefault("supporting_presets", [])
+            entry.setdefault("opportunity_type", "")
+            signals.append(entry)
+        return {"total": len(_signal_log), "signals": signals}
 
     @app.get("/health/scoring-detail")
     async def health_scoring_detail():

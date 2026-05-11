@@ -126,6 +126,10 @@ class Notifier:
         tp_tiers: list[dict] | None = None,
         margin_type: str = "CROSSED",
         entry_reason: str = "",
+        strategy_id: str = "",
+        strategy_preset: str = "",
+        support_presets: list[str] | None = None,
+        opportunity_type: str = "",
     ) -> None:
         """开仓通知 — V2 多因子评分+保护单."""
         direction = "📈 做多" if side == "LONG" else "📉 做空"
@@ -133,6 +137,7 @@ class Notifier:
             event=Events.POSITION_OPENED,
             message=f"{direction} {symbol} @{price:.4f}",
             symbol=symbol,
+            strategy_id=strategy_id,
             price=price,
             quantity=qty,
             leverage=leverage,
@@ -147,6 +152,9 @@ class Notifier:
                 "leverage": leverage,
                 "margin_type": margin_type,
                 "strategy_line": entry_reason,
+                "strategy_preset": strategy_preset,
+                "support_presets": support_presets or [],
+                "opportunity_type": opportunity_type,
             },
         ))
 
@@ -160,6 +168,10 @@ class Notifier:
         exit_reason: str = "",
         hold_duration: str = "",
         entry_reason: str = "",
+        strategy_id: str = "",
+        strategy_preset: str = "",
+        support_presets: list[str] | None = None,
+        opportunity_type: str = "",
         entry_price: float = 0.0,
         hold_seconds: float = 0.0,
         leverage: int = 0,
@@ -171,6 +183,7 @@ class Notifier:
             event=Events.POSITION_CLOSED,
             message=f"{pnl_emoji} 平仓 {symbol} {exit_reason} PnL=${pnl:+.2f}",
             symbol=symbol,
+            strategy_id=strategy_id,
             exit_price=exit_price,
             pnl=pnl,
             pnl_pct=pnl_pct,
@@ -183,6 +196,9 @@ class Notifier:
                 "hold_seconds": hold_seconds,
                 "leverage": leverage,
                 "strategy_line": entry_reason,
+                "strategy_preset": strategy_preset,
+                "support_presets": support_presets or [],
+                "opportunity_type": opportunity_type,
             },
         ))
 

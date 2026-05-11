@@ -60,6 +60,20 @@ def _get_position_open_ts(position: dict | None, open_times: dict, symbol: str) 
     return None
 
 
+def _format_hold_duration(seconds: float) -> str:
+    seconds = max(float(seconds or 0.0), 0.0)
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    minutes, secs = divmod(int(seconds), 60)
+    if minutes < 60:
+        return f"{minutes}m{secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h{minutes:02d}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d{hours:02d}h"
+
+
 async def main() -> None:
     """Application bootstrap and main event loop."""
     # ---- Config ----
@@ -335,6 +349,17 @@ async def main() -> None:
                                 price=float(event.avg_price or 0),
                                 pnl=pnl,
                                 remaining_qty=remaining,
+                            )
+                            pos_ctx = position_manager.get_position_context(event.symbol) or {}
+                            existing = str(pos_ctx.get("tp_tiers_filled", "") or "")
+                            tiers = [item.strip() for item in existing.split(",") if item.strip()]
+                            tier_text = str(tier)
+                            if tier_text not in tiers:
+                                tiers.append(tier_text)
+                            await position_manager.update_risk_state(
+                                event.symbol,
+                                tp_tiers_filled=",".join(tiers),
+                                partial_tp_count=len(tiers),
                             )
             except Exception:
                 logger.exception("WS 订单更新处理异常")
@@ -731,10 +756,14 @@ async def main() -> None:
             if side == "📉 SHORT":
                 roi = -roi
             pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+            strategy_preset = p.get("strategy_preset", "") or ""
+            support_presets = p.get("support_presets", "") or ""
             lines.append(
                 f"<b>{sym}</b> {side} · {lev}x\n"
                 f"  入场: <code>{entry:.5f}</code> → 标记: <code>{mark:.5f}</code>\n"
                 f"  数量: {qty} | 未实现: {pnl_emoji} <code>${pnl:+.2f}</code> ({roi:+.2f}% ROI)\n"
+                f"  策略: <code>{strategy_preset or '--'}</code>"
+                + (f" | 支持: <code>{support_presets}</code>\n" if support_presets else "\n")
             )
             # 保护单状态
             try:
@@ -791,7 +820,13 @@ async def main() -> None:
         max_pos = risk_cfg.max_positions
         rl = "进取" if risk_pct >= 1.0 else "稳健"
         src = "WebSocket 实时" if not use_rest_poller else f"REST {poll_interval}s"
-        tp_mode = raw_cfg.get("trading", {}).get("tp_mode", "ROI")
+        strategy_lines = []
+        for preset_name, runtime_cfg in preset_runtime_map.items():
+            strategy_lines.append(
+                f"• <code>{preset_name}</code> | 风险 {float(runtime_cfg.get('risk_budget', 0.0)):.2f}% | "
+                f"并发 {int(runtime_cfg.get('max_concurrent', 0) or 0)} | "
+                f"模板 <code>{runtime_cfg.get('exit_template', preset_name)}</code>"
+            )
 
         startup_msg = (
             f"🚀 <b>宙斯交易中枢 | 系统启动</b>\n"
@@ -804,13 +839,15 @@ async def main() -> None:
             f"🎯 <b>单笔风险</b>: <code>{risk_pct:.2f}%</code>\n"
             f"\n"
             f"🛑 <b>止损</b>: <code>{risk_cfg.stop_loss_pct:.1f}%</code>\n"
-            f"📈 <b>止盈</b>: <code>{risk_cfg.take_profit_pct:.1f}% {tp_mode}</code>\n"
+            f"🧩 <b>启用策略</b>: <code>{enabled_preset_labels}</code>\n"
             f"\n"
             f"🔍 <b>扫描范围</b>: <code>{sc.scan_top_n}</code> 币种\n"
             f"⏱ <b>扫描间隔</b>: <code>{sc.scan_interval_sec}</code> 秒\n"
             f"📛 <b>最大持仓</b>: <code>{max_pos}</code>\n"
-            f"📊 <b>策略预设</b>: <code>{preset}</code>\n"
             f"📡 <b>行情源</b>: <code>{src}</code>\n"
+            f"{SEP}\n"
+            f"🧭 <b>策略与预算</b>\n"
+            f"{chr(10).join(strategy_lines)}\n"
             f"{SEP}\n"
             f"✅ 系统已就绪"
         )
@@ -1165,6 +1202,7 @@ async def main() -> None:
                 win_rate_today = pnl_snapshot.get("win_rate_1d", summary["win_rate"])
                 total_pnl_today = pnl_snapshot.get("net_pnl_1d", summary["total_pnl"])
                 local_metrics_match = summary["total_trades"] == trades_today
+                strategy_breakdown = summary.get("strategies", {}) or {}
 
                 lines = [
                     f"每日报告 — {today}",
@@ -1180,9 +1218,19 @@ async def main() -> None:
                     f"最大回撤: {summary['max_drawdown_pct']}%" if local_metrics_match else "最大回撤: --",
                     f"夏普比率: {summary['sharpe_ratio']}" if local_metrics_match else "夏普比率: --",
                 ]
+                if strategy_breakdown:
+                    lines.extend(["", "分策略摘要"])
+                    for preset_name, item in strategy_breakdown.items():
+                        hold_label = _format_hold_duration(float(item.get("avg_hold_time_seconds", 0) or 0))
+                        lines.append(
+                            f"- {preset_name}: {int(item.get('trades', 0) or 0)} 笔 | "
+                            f"PnL ${float(item.get('pnl', 0) or 0):+.2f} | "
+                            f"胜率 {float(item.get('win_rate', 0) or 0):.1f}% | "
+                            f"平均持仓 {hold_label}"
+                        )
                 msg = "\n".join(lines)
                 logger.info(f"每日报告已生成:\n{msg}")
-                await telegram.send_message(msg)
+                notifier.notify(EventData(event=Events.DAILY_REPORT, message=msg))
                 last_report_date = today
             except Exception:
                 logger.exception("每日报告生成失败")
@@ -1490,6 +1538,7 @@ async def _execute_signal(
         preset_name = signal.preset or signal.strategy_id.split("_", 1)[0]
         entry_reason = f"preset:{preset_name}|{factor_reason}"
         support_presets = list(getattr(signal, "supporting_presets", []) or [])
+        opportunity_type = getattr(signal, "opportunity_type", "") or preset_name
         if event_repo is not None:
             from cryptopilot.persistence.models import StrategyEvent
 
@@ -1519,6 +1568,10 @@ async def _execute_signal(
             tp_tiers=[],   # 后面填
             margin_type="CROSSED",
             entry_reason=entry_reason,
+            strategy_id=signal.strategy_id,
+            strategy_preset=preset_name,
+            support_presets=support_presets,
+            opportunity_type=opportunity_type,
         )
 
         # 记录开仓时间 (用于平仓通知计算持仓时长)
@@ -1670,12 +1723,7 @@ async def _execute_signal(
         if open_ts:
             dur_sec = max(time.time() - open_ts, 0.0)
             hold_seconds = dur_sec
-            m, s = divmod(int(dur_sec), 60)
-            if m < 60:
-                hold_dur = f"{m}m{s}s"
-            else:
-                h, m = divmod(m, 60)
-                hold_dur = f"{h}h{m:02d}m"
+            hold_dur = _format_hold_duration(dur_sec)
 
         # Infer the exit reason for the operator-facing close notification.
         if signal.action.startswith("CLOSE"):
@@ -1695,6 +1743,13 @@ async def _execute_signal(
         pos_entry_reason = pos.get("entry_reason", "") if pos else ""
         position_strategy_id = pos.get("strategy_id", "") if pos else ""
         position_strategy_preset = pos.get("strategy_preset", "") if pos else ""
+        position_support_presets = [
+            item.strip() for item in str(pos.get("support_presets", "") if pos else "").split(",") if item.strip()
+        ]
+        position_opportunity = ""
+        if pos_entry_reason.startswith("preset:"):
+            _, _, factor_reason = pos_entry_reason.partition("|")
+            position_opportunity = factor_reason or position_strategy_preset
 
         await position_manager.mark_closed(
             signal.symbol,
@@ -1735,6 +1790,10 @@ async def _execute_signal(
             entry_price=entry_px,
             hold_seconds=hold_seconds,
             leverage=int(pos.get("leverage", 0) or 0) if pos else 0,
+            strategy_id=position_strategy_id or signal.strategy_id,
+            strategy_preset=position_strategy_preset or (signal.preset or ""),
+            support_presets=position_support_presets,
+            opportunity_type=position_opportunity,
         )
 
     logger.info(f"订单已执行: {result.status} {side} {qty} {signal.symbol} [id={result.order_id}]")

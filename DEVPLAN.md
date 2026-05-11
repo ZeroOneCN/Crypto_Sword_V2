@@ -89,7 +89,7 @@
 
 - [x] 继续复用 `cryptopilot/risk/exit_manager.py` 现有退出能力，不另起一套退出系统。
 - [x] 升级为按策略注入退出参数，不再使用单一全局 TP 模板。
-- [ ] 在配置与代码中明确三套模板：
+- [x] 在配置与代码中明确三套模板：
   - `ambush`：更远 TP2/TP3、更长 sideways defense / timeout、更宽 trailing、更高 trailing activation、更小单笔风险
   - `chase`：更近 TP1/TP2、更短 sideways defense / timeout、更紧 trailing、更强时效退出
   - `composite`：中档模板
@@ -106,8 +106,8 @@
 
 ## 阶段五：报表、健康接口、网页端、Telegram 按策略展示
 
-- [ ] 升级 `cryptopilot/persistence/reports.py`，在现有 `strategies` 聚合基础上补齐每策略统计指标。
-- [ ] 每策略指标固定包含：
+- [x] 升级 `cryptopilot/persistence/reports.py`，在现有 `strategies` 聚合基础上补齐每策略统计指标。
+- [x] 每策略指标固定包含：
   - `trades`
   - `pnl`
   - `fee`
@@ -118,25 +118,25 @@
   - `profit_factor`
   - `exit_reason breakdown`
   - `TP1/TP2/TP3` 命中统计
-- [ ] 保持现有总览报表兼容，不删除总览指标。
-- [ ] 升级 `cryptopilot/web/health.py`：
+- [x] 保持现有总览报表兼容，不删除总览指标。
+- [x] 升级 `cryptopilot/web/health.py`：
   - `/health/strategy` 返回多策略启用状态、阈值、风控模板摘要
   - `positions` 响应增加策略字段
   - `signals` / `trades` / `logs` 尽量暴露策略归因
-- [ ] 升级 dashboard 与预览页：
+- [x] 升级 dashboard 与预览页：
   - 当前持仓增加“策略”列
   - 系统状态增加“启用策略与预算”
   - 交易绩效增加“按策略拆分”
   - 候选 / 信号日志展示 `preset` 或 `strategy_id`
   - 预览页与正式 dashboard 结构同步
-- [ ] 升级 Telegram：
+- [x] 升级 Telegram：
   - 启动消息展示多策略启用状态，而不是单 preset
   - 开仓通知明确策略来源和机会类型
   - 平仓通知继承持仓策略归因
   - 每日报告增加分策略盈利摘要
 
-完成说明：待完成。
-验证结果：待完成后补充。
+完成说明：已将报表主链路切换为基于 `positions` 闭环记录聚合，补齐 `avg_hold_time`、`avg_win`、`avg_loss`、`profit_factor`、`exit_reason_breakdown`、`TP1/TP2/TP3` 命中统计；`/health/report`、`/health/strategy`、`/health/candidates`、`/health/signals`、`/health/trades` 已暴露多策略字段；正式 dashboard 与 `preview_dashboard.py` 共用同一套 `DASHBOARD_HTML`，当前持仓、交易绩效、系统状态、候选与信号、近期成交、30天净盈亏轨迹、运行日志均已按策略重排；Telegram 启动、开仓、平仓、日报已切到多策略口径，并继承持仓归因与持仓时长。
+验证结果：已执行 `python -m compileall -q cryptopilot preview_dashboard.py`；已核对 `http://localhost:1689/` 预览页加载新模板，顶部显示 `启用 ambush / chase / composite`，候选与信号与近期成交同排，30天净盈亏轨迹与运行日志同区；`/health/strategy` 返回 `ambush,chase,composite`，`/health/report` 返回三策略统计，`/health/logs?lines=200` 返回 200 行。
 
 ## 阶段六：验证、勾选、提交与推送
 
