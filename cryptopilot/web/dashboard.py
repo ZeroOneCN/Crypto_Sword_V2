@@ -267,17 +267,17 @@ async function loadAll(){
   document.getElementById('status').textContent='已连接';
 
   try{
-    const[acctR,posR,hR,cbR,pnlR,ordR,candR,stratR,sigR,tradeR,dailyR]=await Promise.all([
+    const[acctR,posR,hR,cbR,pnlR,ordR,candR,stratR,sigR,tradeR,dailyR,volR]=await Promise.all([
       fetch('/health/account'),fetch('/health/positions?_='+Date.now()),
       fetch('/health'),fetch('/health/circuit'),fetch('/health/pnl'),
       fetch('/health/orders?_='+Date.now()),fetch('/health/candidates'),
       fetch('/health/strategy'),fetch('/health/signals'),fetch('/health/trades'),
-      fetch('/health/report/30d')
+      fetch('/health/report/30d'),fetch('/health/volume')
     ]);
     const acct=await acctR.json(),pos=await posR.json();
     const hD=await hR.json(),cbD=await cbR.json(),pnlD=await pnlR.json();
     const ordD=await ordR.json(),candD=await candR.json(),stratD=await stratR.json();
-    const sigD=await sigR.json(),tradeD=await tradeR.json(),dailyD=await dailyR.json();
+    const sigD=await sigR.json(),tradeD=await tradeR.json(),dailyD=await dailyR.json(),volD=await volR.json();
 
     if(!acct.error){
       setEl('kpi_balance',plainMoney(acct.total_balance));
@@ -306,7 +306,9 @@ async function loadAll(){
     const tripped=cbD.tripped;
     document.getElementById('sys_cb').innerHTML=tripped?'<span class="badge badge-err">已熔断</span>':'<span class="badge badge-ok">正常</span>';
     setEl('kpi_cb',tripped?'已熔断':'正常',tripped?'bad':'good');
-    document.getElementById('sys_daily_pnl').innerHTML='<span class="'+cn(pnlD.net_pnl_1d||0)+' value-big">'+money(pnlD.net_pnl_1d||0)+'</span>';
+    const fmtPct=v=>v!=null?(v>=0?'+':'')+v+'%':'--';
+    document.getElementById('sys_daily_pnl').innerHTML='<span class="'+cn(pnlD.net_pnl_1d||0)+' value-big">'+money(pnlD.net_pnl_1d||0)+'</span> <span class="muted" style="font-size:12px">'+fmtPct(pnlD.net_pnl_1d_pct)+'</span>'+
+      '<br><span class="muted" style="font-size:11px">浮动 '+money(pnlD.unrealized_pnl||0)+'</span>';
     document.getElementById('sys_pool').textContent=(candD&&candD.total||0)+' 个候选';
 
     let slCount=0,tpCount=0,totalOrders=0;
@@ -318,15 +320,30 @@ async function loadAll(){
     window._ordBySymbol=ordD.by_symbol||[];
 
     const net7=pnlD.net_pnl_7d||0,net30=pnlD.net_pnl_30d||0,netTotal=pnlD.net_pnl_total||0,net1d=pnlD.net_pnl_1d||0;
+    const pct7=pnlD.net_pnl_7d_pct,pct30=pnlD.net_pnl_30d_pct,pctAll=pnlD.net_pnl_total_pct,pct1d=pnlD.net_pnl_1d_pct;
+    const upnl=pnlD.unrealized_pnl||0;
+    const fmtBoth=(usd,pctVal)=>'<span class="'+cn(usd)+' value-big">'+money(usd)+'</span> <span class="muted" style="font-size:12px">'+fmtPct(pctVal)+'</span>';
     document.getElementById('report').innerHTML=
-      '<div class="inline-stat"><span>7天净盈亏</span><span class="'+cn(net7)+' value-big">'+money(net7)+'</span></div>'+
-      '<div class="inline-stat"><span>30天净盈亏</span><span class="'+cn(net30)+' value-big">'+money(net30)+'</span></div>'+
-      '<div class="inline-stat"><span>累计净盈亏</span><span class="'+cn(netTotal)+' value-big">'+money(netTotal)+'</span></div>'+
-      '<div class="inline-stat"><span>今日净盈亏</span><span class="'+cn(net1d)+' value-big">'+money(net1d)+'</span></div>'+
+      '<div class="inline-stat"><span>今日净盈亏</span>'+fmtBoth(net1d,pct1d)+'</div>'+
+      '<div class="inline-stat"><span>7天净盈亏</span>'+fmtBoth(net7,pct7)+'</div>'+
+      '<div class="inline-stat"><span>30天净盈亏</span>'+fmtBoth(net30,pct30)+'</div>'+
+      '<div class="inline-stat"><span>累计净盈亏</span>'+fmtBoth(netTotal,pctAll)+'</div>'+
+      '<div class="inline-stat"><span>浮动盈亏</span><span class="'+cn(upnl)+' value-big">'+money(upnl)+'</span></div>'+
       '<div class="inline-stat"><span>手续费</span><span>'+plainMoney(pnlD.commission_7d||0)+'</span></div>'+
       '<div class="inline-stat"><span>资金费率</span><span>'+plainMoney(pnlD.funding_7d||0)+'</span></div>'+
-      '<div class="inline-stat"><span>交易币种</span><span>'+(pnlD.symbols_traded||0)+'</span></div>';
-    document.getElementById('hint_perf').textContent='含手续费+资金费率';
+      '<div class="inline-stat"><span>交易币种</span><span>'+(pnlD.symbols_traded||0)+'</span></div>'+
+      '<div class="inline-stat"><span>总权益</span><span>'+plainMoney(pnlD.total_equity||0)+'</span></div>';
+    // 交易量统计
+    if(!volD.error){
+      document.getElementById('report').innerHTML+=
+        '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline-soft)"></div>'+
+        '<div class="inline-stat"><span style="color:var(--ink-muted);font-size:12px;text-transform:uppercase">交易量</span><span></span></div>'+
+        '<div class="inline-stat"><span>今日</span><span>'+plainMoney(volD.volume_1d||0)+' ('+(volD.trades_1d||0)+'笔)</span></div>'+
+        '<div class="inline-stat"><span>7天</span><span>'+plainMoney(volD.volume_7d||0)+' ('+(volD.trades_7d||0)+'笔)</span></div>'+
+        '<div class="inline-stat"><span>30天</span><span>'+plainMoney(volD.volume_30d||0)+' ('+(volD.trades_30d||0)+'笔)</span></div>'+
+        '<div class="inline-stat"><span>累计</span><span>'+plainMoney(volD.volume_total||0)+' ('+(volD.trades_total||0)+'笔)</span></div>';
+    }
+    document.getElementById('hint_perf').textContent='含手续费+资金费率+浮动盈亏';
 
     let protBySymbol={};(window._ordBySymbol||[]).forEach(s=>{protBySymbol[s.symbol]={sl:s.stop_orders,tp:s.tp_orders,total:s.total}});
     const posBody=document.getElementById('positions');

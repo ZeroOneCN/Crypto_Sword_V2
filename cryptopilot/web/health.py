@@ -150,6 +150,40 @@ async def _fetch_income_pnl(order_executor) -> dict | None:
 
     result["symbols_traded"] = len(result["symbols_traded"])
 
+    # ---- 合并未实现盈亏 (Unrealized PnL) 与百分比 ----
+    # 币安官网显示的是 已实现+未实现 的总盈亏，而 income API 只有已实现
+    try:
+        acct = await order_executor.get_account_info()
+        unrealized = acct.unrealized_pnl or 0.0
+        wallet_balance = acct.total_balance or 0.0
+        total_equity = wallet_balance + unrealized  # 当前总权益
+    except Exception:
+        unrealized = 0.0
+        wallet_balance = 0.0
+        total_equity = 0.0
+
+    result["unrealized_pnl"] = round(unrealized, 4)
+    result["wallet_balance"] = round(wallet_balance, 2)
+    result["total_equity"] = round(total_equity, 2)
+
+    # 含未实现的总净盈亏 (与币安官网对齐)
+    total_net = result["net_pnl_total"] + unrealized
+    result["total_net_pnl"] = round(total_net, 4)
+
+    # 百分比: net / (当前权益 - net) ≈ 相对期间初资金的回报率
+    # 累计: 含未实现盈亏 (币安官网标准)
+    # 7d/30d/1d: 仅已实现 (无法拆分历史未实现盈亏)
+    def _pct(net: float) -> float | None:
+        denom = total_equity - net
+        if denom and abs(denom) > 0.001:
+            return round(net / denom * 100, 2)
+        return None
+
+    result["net_pnl_1d_pct"] = _pct(result["net_pnl_1d"])
+    result["net_pnl_7d_pct"] = _pct(result["net_pnl_7d"])
+    result["net_pnl_30d_pct"] = _pct(result["net_pnl_30d"])
+    result["net_pnl_total_pct"] = _pct(total_net)
+
     for k in list(result.keys()):
         if isinstance(result[k], float):
             result[k] = round(result[k], 4)
@@ -583,6 +617,76 @@ def create_health_app(
         if data is None:
             return {"error": "无法获取盈亏数据"}
         return data
+
+    @app.get("/health/volume")
+    async def health_volume():
+        """交易量统计 (总成交额, 按周期)."""
+        if order_executor is None:
+            return {"error": "订单执行器不可用"}
+        try:
+            import time as _time
+            now = _time.time()
+            # 从 income API 获取 REALIZED_PNL 记录来推算成交量
+            # (每笔 REALIZED_PNL 对应一次平仓, 但我们更需要总成交额)
+            # 改用 DB fills 表来计算真实成交量
+            if db is None:
+                return {"error": "数据库不可用"}
+
+            cutoff_1d = (now - 86400) * 1000
+            cutoff_7d = (now - 7 * 86400) * 1000
+            cutoff_30d = (now - 30 * 86400) * 1000
+
+            rows = await db.fetch_all("""
+                SELECT f.price, f.qty, f.filled_at, o.symbol
+                FROM fills f JOIN orders o ON o.id = f.order_id
+                ORDER BY f.filled_at DESC
+            """)
+
+            vol_total = 0.0
+            vol_1d = 0.0
+            vol_7d = 0.0
+            vol_30d = 0.0
+            trades_total = len(rows)
+            trades_1d = 0
+            trades_7d = 0
+            trades_30d = 0
+
+            for r in rows:
+                price = float(r.get("price", 0) or 0)
+                qty = float(r.get("qty", 0) or 0)
+                notional = abs(price * qty)
+                vol_total += notional
+
+                filled_at = r.get("filled_at", "")
+                if filled_at:
+                    try:
+                        from datetime import datetime
+                        ts = datetime.fromisoformat(str(filled_at).replace("Z", "+00:00")).timestamp() * 1000
+                        if ts >= cutoff_1d:
+                            vol_1d += notional
+                            trades_1d += 1
+                        if ts >= cutoff_7d:
+                            vol_7d += notional
+                            trades_7d += 1
+                        if ts >= cutoff_30d:
+                            vol_30d += notional
+                            trades_30d += 1
+                    except Exception:
+                        pass
+
+            return {
+                "volume_total": round(vol_total, 2),
+                "volume_1d": round(vol_1d, 2),
+                "volume_7d": round(vol_7d, 2),
+                "volume_30d": round(vol_30d, 2),
+                "trades_total": trades_total,
+                "trades_1d": trades_1d,
+                "trades_7d": trades_7d,
+                "trades_30d": trades_30d,
+            }
+        except Exception as exc:
+            logger.exception("volume endpoint failed")
+            return {"error": str(exc)}
 
     @app.get("/health/account")
     @_cached(30)
