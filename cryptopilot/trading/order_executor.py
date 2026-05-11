@@ -83,6 +83,7 @@ class AccountInfo:
     unrealized_pnl: float
     margin_ratio: float
     margin_type: str = ""
+    maintenance_margin: float = 0.0
 
 
 @dataclass
@@ -668,6 +669,7 @@ class OrderExecutor:
             unrealized_pnl=float(raw.get("totalUnrealizedProfit", raw.get("unrealizedPnl", 0))),
             margin_ratio=float(raw.get("marginRatio", 0)),
             margin_type=raw.get("marginType", ""),
+            maintenance_margin=float(raw.get("totalMaintMargin", 0)),
         )
 
     # ---- 历史数据拉取 ----

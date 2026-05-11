@@ -248,28 +248,37 @@ class StrategyEngine:
                         if self._position_manager.get_position(cand.symbol):
                             continue
 
-                        # REST 按需拉取: K线 + OI历史 + 标记价 → 填入缓存供因子使用
+                        # REST 按需拉取: 先检查 WS 缓存是否已有数据，避免重复请求
+                        # 1m K线优先从缓存取 (WS 实时推送已覆盖)
+                        need_klines_rest = False
+                        if cache.get_klines(cand.symbol, "1m", limit=50):
+                            # WS 已推送足够数据，跳过 REST
+                            pass
+                        else:
+                            need_klines_rest = True
+
                         if rest_data:
                             try:
-                                klines = await rest_data.fetch_klines(cand.symbol, "1m", limit=50)
-                                klines_5m = await rest_data.fetch_klines(cand.symbol, "5m", limit=50)
-                                klines_4h = await rest_data.fetch_klines(cand.symbol, "4h", limit=200)
+                                if need_klines_rest:
+                                    klines = await rest_data.fetch_klines(cand.symbol, "1m", limit=50)
+                                    klines_5m = await rest_data.fetch_klines(cand.symbol, "5m", limit=50)
+                                    for k in klines:
+                                        await cache.update(StreamMessage(stream="rest", data=k))
+                                    for k in klines_5m:
+                                        k.interval = "5m"
+                                        await cache.update(StreamMessage(stream="rest", data=k))
+
+                                # 4h K线: 仅在缓存缺失时拉取 (量大，200根)
+                                if not cache.get_klines(cand.symbol, "4h", limit=200):
+                                    klines_4h = await rest_data.fetch_klines(cand.symbol, "4h", limit=200)
+                                    for k in klines_4h:
+                                        k.interval = "4h"
+                                        await cache.update(StreamMessage(stream="rest", data=k))
+
                                 oi_change = await rest_data.calc_oi_change_pct(cand.symbol, 60)
                                 mp = await rest_data.fetch_mark_price(cand.symbol)
-
-                                # 填入 MarketDataCache 供因子使用
-                                for k in klines:
-                                    await cache.update(StreamMessage(stream="rest", data=k))
-                                for k in klines_5m:
-                                    k.interval = "5m"
-                                    await cache.update(StreamMessage(stream="rest", data=k))
-                                for k in klines_4h:
-                                    k.interval = "4h"
-                                    await cache.update(StreamMessage(stream="rest", data=k))
                                 if mp:
                                     await cache.update(StreamMessage(stream="rest", data=mp))
-
-                                # 更新 candidate 的 OI 变化和费率 (更精确的 REST 数据)
                                 if oi_change != 0:
                                     cand.oi_change_pct = oi_change
                                 if mp:

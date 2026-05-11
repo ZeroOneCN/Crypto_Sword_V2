@@ -167,6 +167,7 @@ async def main() -> None:
     )
     order_executor = OrderExecutor(cfg, api_key, api_secret, rate_limiter)
     await order_executor.initialize()
+    await asyncio.sleep(2.0)  # 启动节流: 避免密集 REST 触发限流
 
     order_manager = OrderManager(db)
     position_manager = PositionManager(db)
@@ -309,8 +310,10 @@ async def main() -> None:
         logger.warning(f"WS 交易客户端不可用, 降级为纯 REST 下单: {exc}")
         ws_trader_connected = False
 
-    # Sync initial state from exchange
+    # Sync initial state from exchange (加节流延迟避免触发限流)
+    await asyncio.sleep(1.5)
     await position_manager.sync_from_exchange(order_executor)
+    await asyncio.sleep(1.5)
     await order_manager.sync_with_exchange(order_executor)
     logger.info(
         f"初始状态已加载: {position_manager.position_count} 个持仓, "
@@ -556,7 +559,7 @@ async def main() -> None:
                 market_cap_fetcher=mcap_fetcher,
                 rest_data=rest_data,
                 special_signals=special_signals,
-                scan_interval=10.0,
+                scan_interval=30.0,
                 top_k=3,
                 max_signals_per_cycle=1,  # 每轮仅最强信号
                 buy_threshold=buy_threshold,

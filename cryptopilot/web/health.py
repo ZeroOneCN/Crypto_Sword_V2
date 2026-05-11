@@ -2,11 +2,32 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
+from functools import wraps
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from loguru import logger
+
+
+# ---- 简易 TTL 缓存 (避免仪表盘刷新狂打 REST API) ----
+_ttl_cache: dict[str, tuple[float, object]] = {}
+
+def _cached(ttl: float):
+    """装饰器: 返回值缓存 ttl 秒."""
+    def deco(fn):
+        @wraps(fn)
+        async def wrapper(*a, **kw):
+            key = fn.__name__
+            now = time.time()
+            if key in _ttl_cache and (now - _ttl_cache[key][0]) < ttl:
+                return _ttl_cache[key][1]
+            result = await fn(*a, **kw)
+            _ttl_cache[key] = (now, result)
+            return result
+        return wrapper
+    return deco
 
 
 # 全局信号日志 (环形缓冲区, 最多保留 200 条)
@@ -292,6 +313,7 @@ def create_health_app(
         }
 
     @app.get("/health/orders")
+    @_cached(30)
     async def health_orders():
         """返回当前挂单状态 (含 SL/TP 保护单统计 + algo orders)."""
         if order_executor is None:
@@ -511,6 +533,7 @@ def create_health_app(
         return data
 
     @app.get("/health/account")
+    @_cached(30)
     async def health_account():
         """实时账户数据."""
         if order_executor is None:
@@ -518,20 +541,24 @@ def create_health_app(
         try:
             acct = await order_executor.get_account_info()
             mr = acct.margin_ratio or 0
-            # margin_display: 0 或接近 0 表示全仓共享模式
+            margin_balance = acct.total_balance + acct.unrealized_pnl
+            # margin_display: V1 风格 — USDT 全仓 X.XX%
             if mr <= 0.0001:
-                margin_display = "全仓(共享)"
+                margin_ratio_str = "全仓(共享)"
             else:
-                margin_display = f"{mr * 100:.2f}%"
+                margin_ratio_str = f"{mr * 100:.2f}%"
+            mm = acct.maintenance_margin
+            margin_display = f"USDT 全仓 {margin_ratio_str}"
             return {
                 "total_balance": round(acct.total_balance, 2),
                 "available_balance": round(acct.available_balance, 2),
                 "unrealized_pnl": round(acct.unrealized_pnl, 2),
                 "margin_ratio": round(acct.margin_ratio, 4),
+                "margin_ratio_str": margin_ratio_str,
                 "margin_display": margin_display,
-                "margin_type": acct.margin_type or (
-                    "cross"  # Binance 默认全仓
-                ),
+                "maintenance_margin": round(mm, 4),
+                "margin_balance": round(margin_balance, 2),
+                "margin_type": acct.margin_type or "cross",
                 "timestamp": datetime.now(tz=timezone.utc).isoformat(),
             }
         except Exception as exc:

@@ -21,7 +21,7 @@ market_data:
 risk:
   margin_type: crossed         # isolated (逐仓) / crossed (全仓)
   max_daily_loss_pct: 8.0    # Stop all trading if daily PnL drops below -8%
-  max_positions: 3           # Maximum concurrent positions (缩仓)
+  max_positions: 5           # Maximum concurrent positions
   max_position_pct: 8        # Max single position size as % of account (缩仓)
   max_leverage: 10           # Hard cap on leverage
   default_leverage: 2        # Default leverage (缩仓)

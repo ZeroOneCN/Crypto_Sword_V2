@@ -171,7 +171,15 @@ async function load(){
       upnl.textContent=fmtUSD(d.unrealized_pnl);
       upnl.style.color=d.unrealized_pnl>=0?'#03904a':'#da291c';
       const mr=document.getElementById('stat_margin');
-      mr.textContent=d.margin_display||((d.margin_ratio||0)*100).toFixed(2)+'%';
+      mr.textContent=d.margin_ratio_str||d.margin_display||((d.margin_ratio||0)*100).toFixed(2)+'%';
+      // 维持保证金子行
+      if(d.maintenance_margin>0){
+        mr.nextElementSibling.textContent='维持 '+fmtUSD(d.maintenance_margin);
+      }
+      // 余额卡片: 加保证金余额子行
+      if(d.margin_balance>0){
+        cards[0].querySelector('.sub').innerHTML='USDT <span style=\"color:#8fa4b8\">│ 保证金 '+fmtUSD(d.margin_balance)+'</span>';
+      }
       document.getElementById('stat_mtype').textContent=marginLabel(d.margin_type||'cross');
     }
   }catch(e){}
