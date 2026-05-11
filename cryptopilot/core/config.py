@@ -56,7 +56,7 @@ class WebSocketConfig(BaseModel):
 
 class RiskConfig(BaseModel):
     max_daily_loss_pct: float = 2.0
-    max_positions: int = 5
+    max_positions: int = 10
     max_position_pct: float = 20.0
     max_leverage: int = 10
     default_leverage: int = 3
