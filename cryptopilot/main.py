@@ -588,6 +588,7 @@ async def main() -> None:
     )
 
     # Wire Telegram commands to strategy engine
+    SEP = "─────────────────────"
     async def get_status_text() -> str:
         """V1 风格系统状态."""
         from datetime import datetime, timezone
