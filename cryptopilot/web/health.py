@@ -55,6 +55,70 @@ def _parse_iso_ts(value: str) -> datetime | None:
         return None
 
 
+async def _recent_trade_symbols(db=None, position_manager=None, limit: int = 8) -> list[str]:
+    symbols: list[str] = []
+    seen: set[str] = set()
+
+    def _add(symbol: str | None) -> None:
+        text = str(symbol or "").upper().strip()
+        if not text or text in seen:
+            return
+        seen.add(text)
+        symbols.append(text)
+
+    if position_manager is not None:
+        try:
+            for pos in position_manager.get_all_positions():
+                _add(pos.get("symbol"))
+        except Exception:
+            pass
+
+    if db is not None:
+        try:
+            for row in await db.fetch_all(
+                "SELECT symbol FROM orders ORDER BY created_at DESC LIMIT 60"
+            ):
+                _add(row.get("symbol"))
+        except Exception:
+            pass
+        try:
+            for row in await db.fetch_all(
+                "SELECT symbol FROM positions ORDER BY updated_at DESC LIMIT 30"
+            ):
+                _add(row.get("symbol"))
+        except Exception:
+            pass
+
+    return symbols[:limit]
+
+
+async def _recent_order_strategy_map(db=None, limit: int = 500) -> dict[str, dict]:
+    if db is None:
+        return {}
+
+    try:
+        rows = await db.fetch_all(
+            """
+            SELECT exchange_order_id, strategy_name, side, type, symbol, created_at
+            FROM orders
+            WHERE exchange_order_id IS NOT NULL AND exchange_order_id != ''
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    except Exception:
+        return {}
+
+    mapping: dict[str, dict] = {}
+    for row in rows:
+        exchange_order_id = str(row.get("exchange_order_id", "") or "").strip()
+        if not exchange_order_id or exchange_order_id in mapping:
+            continue
+        mapping[exchange_order_id] = dict(row)
+    return mapping
+
+
 async def _fetch_income_pnl(order_executor) -> dict | None:
     """从 Binance income API 拉取盈亏汇总 (分页拉全, 与交易所一致)."""
     import time as _time
@@ -873,8 +937,78 @@ def create_health_app(
             return {"error": "Internal server error"}
 
     @app.get("/health/trades")
+    @_cached(20)
     async def health_trades():
-        """返回最近成交记录 (JOIN fills + orders)."""
+        """Return recent trades, preferring Binance userTrades over local fills."""
+        try:
+            if order_executor is not None:
+                symbols = await _recent_trade_symbols(
+                    db=db,
+                    position_manager=position_manager,
+                    limit=8,
+                )
+                strategy_map = await _recent_order_strategy_map(db=db, limit=600)
+                if symbols:
+                    import time as _time
+
+                    start_ms = int((_time.time() - 7 * 86400) * 1000)
+                    exchange_items: list[dict] = []
+                    seen_trade_ids: set[tuple[str, int]] = set()
+
+                    for symbol in symbols:
+                        try:
+                            history = await order_executor.get_trade_history(
+                                symbol,
+                                start_time=start_ms,
+                                limit=80,
+                            )
+                        except Exception:
+                            logger.debug(f"trade history fetch skipped: {symbol}", exc_info=True)
+                            continue
+
+                        for trade in history:
+                            trade_key = (trade.symbol, trade.trade_id)
+                            if trade_key in seen_trade_ids:
+                                continue
+                            seen_trade_ids.add(trade_key)
+
+                            order_meta = strategy_map.get(str(trade.order_id), {})
+                            strategy_name = str(order_meta.get("strategy_name", "") or "")
+                            preset = strategy_name.split("_", 1)[0] if strategy_name else ""
+                            exchange_items.append({
+                                "symbol": trade.symbol,
+                                "side": trade.side or ("BUY" if trade.buyer else "SELL"),
+                                "type": order_meta.get("type", ""),
+                                "price": round(trade.price, 8),
+                                "qty": round(trade.qty, 8),
+                                "commission": round(trade.commission, 8),
+                                "commission_asset": trade.commission_asset,
+                                "filled_at": datetime.fromtimestamp(
+                                    trade.time / 1000,
+                                    tz=timezone.utc,
+                                ).isoformat(),
+                                "time": trade.time,
+                                "order_id": trade.order_id,
+                                "trade_id": trade.trade_id,
+                                "realized_pnl": round(trade.realized_pnl, 8),
+                                "position_side": trade.position_side,
+                                "strategy_name": strategy_name,
+                                "strategy_id": strategy_name,
+                                "preset": preset,
+                                "source": "exchange",
+                            })
+
+                    if exchange_items:
+                        exchange_items.sort(key=lambda item: item.get("time", 0), reverse=True)
+                        trimmed = exchange_items[:50]
+                        return {
+                            "total": len(trimmed),
+                            "trades": trimmed,
+                            "source": "exchange",
+                        }
+        except Exception:
+            logger.exception("exchange trade endpoint failed")
+
         if db is None:
             return {"error": "数据库不可用"}
         try:
@@ -891,9 +1025,10 @@ def create_health_app(
                 item = dict(row)
                 item["strategy_id"] = item.get("strategy_name", "")
                 item["preset"] = str(item.get("strategy_name", "") or "").split("_", 1)[0]
+                item["source"] = "database"
                 trades.append(item)
-            return {"total": len(trades), "trades": trades}
-        except Exception as exc:
+            return {"total": len(trades), "trades": trades, "source": "database"}
+        except Exception:
             logger.exception("health endpoint failed")
             return {"error": "Internal server error"}
 
