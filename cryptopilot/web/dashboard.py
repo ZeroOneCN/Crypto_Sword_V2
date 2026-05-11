@@ -171,7 +171,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="panel">
       <div class="panel-head"><h2>当前持仓</h2><span class="pill" id="orderSummary">保护单 --</span></div>
       <div class="scroll"><table>
-        <thead><tr><th>币种</th><th>方向</th><th>数量</th><th>杠杆</th><th>入场</th><th>标记</th><th>未实现</th><th>ROI</th><th>预估SL/TP</th><th>保护单</th></tr></thead>
+        <thead><tr><th>币种</th><th>方向</th><th>数量</th><th>杠杆</th><th>入场</th><th>持仓</th><th>标记</th><th>未实现</th><th>ROI</th><th>预估SL/TP</th><th>保护单</th></tr></thead>
         <tbody id="positions"></tbody>
       </table></div>
     </div>
@@ -258,6 +258,17 @@ const esc=v=>{const s=String(v??'');return s.replace(/&/g,'&amp;').replace(/</g,
 const price=v=>num(v)?Number(v).toPrecision(8).replace(/\.?0+$/,''):'--';
 const cn=v=>num(v)>0?'good':(num(v)<0?'bad':'muted');
 const marginLabel=t=>t==='ISOLATED'||t==='isolated'?'逐仓':'全仓';
+function holdLabel(sec){
+  const total=Math.max(0, Math.floor(num(sec)));
+  if(!total) return '--';
+  if(total<60) return total+'s';
+  const mins=Math.floor(total/60), secs=total%60;
+  if(mins<60) return mins+'m'+String(secs).padStart(2,'0')+'s';
+  const hours=Math.floor(mins/60), remMins=mins%60;
+  if(hours<24) return hours+'h'+String(remMins).padStart(2,'0')+'m';
+  const days=Math.floor(hours/24), remHours=hours%24;
+  return days+'d'+String(remHours).padStart(2,'0')+'h';
+}
 
 function setEl(id,val,className=''){const el=document.getElementById(id);el.textContent=val;if(className)el.className=className+' value';}
 
@@ -356,6 +367,7 @@ async function loadAll(){
         const prot=protBySymbol[p.symbol]||{sl:0,tp:0};
         const protHtml=(prot.sl>0||prot.tp>0)?'SL:'+prot.sl+' TP:'+prot.tp:'<span class="badge badge-err pulse">裸仓</span>';
         const slPrice=num(p.sl_price);const tpPrice=num(p.tp_price);
+        const holdHtml=holdLabel(p.hold_seconds)+(p.opened_at?'<br><span class="muted" style="font-size:11px">'+esc(new Date(p.opened_at).toLocaleString())+'</span>':'');
         let slPnl=0,tpPnl=0;
         if(side==='LONG'){slPnl=slPrice>0?(slPrice-entry)*Math.abs(qty):0;tpPnl=tpPrice>0?(tpPrice-entry)*Math.abs(qty):0}
         else{slPnl=slPrice>0?(entry-slPrice)*Math.abs(qty):0;tpPnl=tpPrice>0?(entry-tpPrice)*Math.abs(qty):0}
@@ -363,12 +375,12 @@ async function loadAll(){
         html+='<tr><td><b>'+esc(p.symbol)+'</b></td>'+
           '<td><span class="badge '+(side==='LONG'?'badge-long':'badge-short')+'">'+side+'</span></td>'+
           '<td class="mono">'+fmt.format(num(p.qty))+'</td><td>'+lev+'x</td>'+
-          '<td class="mono">'+price(p.entry_price)+'</td><td class="mono">'+price(p.mark_price)+'</td>'+
+          '<td class="mono">'+price(p.entry_price)+'</td><td class="nowrap">'+holdHtml+'</td><td class="mono">'+price(p.mark_price)+'</td>'+
           '<td class="'+cn(pnl)+'">'+money(pnl)+'</td><td class="'+cn(roi)+'">'+pct(roi)+'</td>'+
           '<td class="nowrap">'+estPnlHtml+'</td><td>'+protHtml+'</td></tr>';
       });
       posBody.innerHTML=html;
-    }else{posBody.innerHTML='<tr><td colspan="10" class="muted">当前无持仓</td></tr>'}
+    }else{posBody.innerHTML='<tr><td colspan="11" class="muted">当前无持仓</td></tr>'}
 
     if(!sigD.error&&sigD.signals&&sigD.signals.length>0){
       let html='';

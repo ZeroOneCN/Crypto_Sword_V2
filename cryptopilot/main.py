@@ -14,6 +14,51 @@ from datetime import datetime, timezone
 from loguru import logger
 
 
+def _parse_iso_ts(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+async def _confirm_filled_order(executor, symbol: str, result, fallback_price: float = 0.0):
+    """Poll order status until a usable average fill price is available."""
+    fill_price = result.avg_price if result.avg_price > 0 else 0.0
+    if fill_price > 0 or not result.client_order_id:
+        return result, fill_price
+
+    logger.info(f"Waiting for fill confirmation: {symbol}")
+    for attempt in range(20):
+        await asyncio.sleep(0.5)
+        try:
+            updated = await executor.get_order(symbol, result.client_order_id)
+        except Exception:
+            logger.debug(f"Fill confirmation skipped for {symbol} (attempt {attempt + 1})", exc_info=True)
+            continue
+        if updated.avg_price > 0:
+            logger.info(f"{symbol} fill confirmed @{updated.avg_price:.5f}")
+            return updated, updated.avg_price
+
+    if fallback_price > 0:
+        logger.warning(f"{symbol} fill confirmation timed out, fallback price {fallback_price:.5f}")
+        return result, fallback_price
+
+    logger.warning(f"{symbol} fill confirmation timed out without usable avg price")
+    return result, 0.0
+
+
+def _get_position_open_ts(position: dict | None, open_times: dict, symbol: str) -> float | None:
+    open_ts = open_times.pop(symbol, None)
+    if open_ts:
+        return open_ts
+    if position:
+        created_at = _parse_iso_ts(str(position.get("created_at", "")))
+        if created_at is not None:
+            return created_at.timestamp()
+    return None
+
 
 async def main() -> None:
     """Application bootstrap and main event loop."""
@@ -988,9 +1033,16 @@ async def main() -> None:
 
             # Generate and send report
             try:
-                summary = await report_generator.generate_summary()
+                summary = await report_generator.generate_summary(days=1)
+                from cryptopilot.web.health import _fetch_income_pnl
+
+                pnl_snapshot = await _fetch_income_pnl(order_executor) or {}
                 positions = position_manager.get_all_positions()
                 acct = await order_executor.get_account_info()
+                trades_today = pnl_snapshot.get("trade_count_1d", summary["total_trades"])
+                win_rate_today = pnl_snapshot.get("win_rate_1d", summary["win_rate"])
+                total_pnl_today = pnl_snapshot.get("net_pnl_1d", summary["total_pnl"])
+                local_metrics_match = summary["total_trades"] == trades_today
 
                 lines = [
                     f"每日报告 — {today}",
@@ -1000,11 +1052,11 @@ async def main() -> None:
                     f"未实现盈亏: ${acct.unrealized_pnl:.2f}",
                     f"当前持仓: {len(positions)} 个",
                     "",
-                    f"今日交易: {summary['total_trades']} 笔",
-                    f"胜率: {summary['win_rate']}%",
-                    f"总盈亏: ${summary['total_pnl']}",
-                    f"最大回撤: {summary['max_drawdown_pct']}%",
-                    f"夏普比率: {summary['sharpe_ratio']}",
+                    f"今日交易: {trades_today} 笔",
+                    f"胜率: {win_rate_today}%",
+                    f"总盈亏: ${total_pnl_today}",
+                    f"最大回撤: {summary['max_drawdown_pct']}%" if local_metrics_match else "最大回撤: --",
+                    f"夏普比率: {summary['sharpe_ratio']}" if local_metrics_match else "夏普比率: --",
                 ]
                 msg = "\n".join(lines)
                 logger.info(f"每日报告已生成:\n{msg}")
@@ -1271,35 +1323,23 @@ async def _execute_signal(
 
     await order_manager.record_order(result, signal.strategy_id)
 
-    # 获取实际成交价 — Market 单异步成交, 需轮询确认
-    actual_fill_price = result.avg_price if result.avg_price > 0 else 0.0
+    # Confirm the actual fill price, especially for async market closes.
+    position_before_close = position_manager.get_position(signal.symbol) if signal.action.startswith("CLOSE") else None
+    fallback_fill_price = entry_price
+    if signal.action.startswith("CLOSE") and position_before_close is not None:
+        fallback_fill_price = float(position_before_close.get("mark_price", 0) or signal.price or 0)
+    result, actual_fill_price = await _confirm_filled_order(
+        executor,
+        signal.symbol,
+        result,
+        fallback_price=fallback_fill_price,
+    )
 
     # Notify
     if signal.action.startswith("OPEN"):
-        # 等待 Market 单成交 (avg_price > 0 表示已成交)
-        if actual_fill_price <= 0:
-            logger.info(f"等待 {signal.symbol} Market 单成交...")
-            for attempt in range(20):  # 最多等 10 秒
-                await asyncio.sleep(0.5)
-                try:
-                    updated = await executor.get_order(
-                        signal.symbol, result.client_order_id or ""
-                    )
-                    if updated and updated.avg_price > 0:
-                        actual_fill_price = updated.avg_price
-                        result = updated
-                        logger.info(f"{signal.symbol} 已成交 @{actual_fill_price:.5f}")
-                        break
-                except Exception:
-                    logger.debug(f"成交确认查询跳过 {signal.symbol} (attempt {attempt+1})", exc_info=True)
-            else:
-                actual_fill_price = entry_price  # 兜底
-                logger.warning(f"{signal.symbol} 成交确认超时, 用信号价兜底")
-
-        # 同步持仓确保仓位存在
         await position_manager.sync_from_exchange(executor)
 
-        # 检查仓位是否真的存在
+        # Verify the position exists before placing protection orders.
         pos_check = position_manager.get_position(signal.symbol)
         if not pos_check or abs(pos_check.get("qty", 0)) <= 0:
             logger.error(f"{signal.symbol} 仓位不存在, 无法放置 SL/TP — 撤单")
@@ -1448,22 +1488,24 @@ async def _execute_signal(
         except Exception:
             logger.exception(f"{signal.symbol} TP 提交异常")
     else:
-        close_fill_price = result.avg_price if result.avg_price > 0 else 0.0
+        close_fill_price = actual_fill_price if actual_fill_price > 0 else (result.avg_price if result.avg_price > 0 else 0.0)
         pnl = _calc_pnl(position_manager, signal.symbol, close_fill_price, qty)
 
         # 🆕 V2 平仓通知 — 带持仓时长和退出原因
-        pos = position_manager.get_position(signal.symbol)
+        pos = position_before_close or position_manager.get_position(signal.symbol)
         entry_px = pos.get("entry_price", 0) if pos else 0
         pnl_pct = ((close_fill_price - entry_px) / entry_px * 100) if entry_px > 0 else 0
         if pos_side == "SHORT":
             pnl_pct = -pnl_pct
 
-        # 计算持仓时长
+        # Compute hold duration from in-memory open time or persisted position time.
         open_times = getattr(_execute_signal, '_position_open_time', {})
-        open_ts = open_times.pop(signal.symbol, None)
+        open_ts = _get_position_open_ts(pos, open_times, signal.symbol)
         hold_dur = ""
+        hold_seconds = 0.0
         if open_ts:
-            dur_sec = time.time() - open_ts
+            dur_sec = max(time.time() - open_ts, 0.0)
+            hold_seconds = dur_sec
             m, s = divmod(int(dur_sec), 60)
             if m < 60:
                 hold_dur = f"{m}m{s}s"
@@ -1471,7 +1513,7 @@ async def _execute_signal(
                 h, m = divmod(m, 60)
                 hold_dur = f"{h}h{m:02d}m"
 
-        # 推断退出原因
+        # Infer the exit reason for the operator-facing close notification.
         if signal.action.startswith("CLOSE"):
             reason = signal.comment or ""
             if "sl" in reason.lower() or "stop" in reason.lower():
@@ -1485,7 +1527,7 @@ async def _execute_signal(
         else:
             exit_reason = "MARKET_CLOSE"
 
-        # 获取开仓原因
+        # Reuse the recorded entry reason when sending the close notification.
         pos_entry_reason = pos.get("entry_reason", "") if pos else ""
 
         notifier.position_closed(
@@ -1497,6 +1539,9 @@ async def _execute_signal(
             exit_reason=exit_reason,
             hold_duration=hold_dur,
             entry_reason=pos_entry_reason,
+            entry_price=entry_px,
+            hold_seconds=hold_seconds,
+            leverage=int(pos.get("leverage", 0) or 0) if pos else 0,
         )
 
     logger.info(f"订单已执行: {result.status} {side} {qty} {signal.symbol} [id={result.order_id}]")

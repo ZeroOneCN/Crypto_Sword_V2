@@ -142,6 +142,12 @@ class Notifier:
             tp_tiers=tp_tiers or [],
             margin_type=margin_type,
             entry_reason=entry_reason,
+            extra={
+                "side": side,
+                "leverage": leverage,
+                "margin_type": margin_type,
+                "strategy_line": entry_reason,
+            },
         ))
 
     def position_closed(
@@ -154,6 +160,9 @@ class Notifier:
         exit_reason: str = "",
         hold_duration: str = "",
         entry_reason: str = "",
+        entry_price: float = 0.0,
+        hold_seconds: float = 0.0,
+        leverage: int = 0,
     ) -> None:
         """平仓通知 — 带上退出原因和持仓时长."""
         pnl_emoji = "🟢" if pnl >= 0 else "🔴"
@@ -168,6 +177,13 @@ class Notifier:
             exit_reason=exit_reason,
             hold_duration=hold_duration,
             entry_reason=entry_reason,
+            extra={
+                "side": side,
+                "entry_price": entry_price,
+                "hold_seconds": hold_seconds,
+                "leverage": leverage,
+                "strategy_line": entry_reason,
+            },
         ))
 
     def protection_placed(

@@ -46,6 +46,15 @@ def add_signal_log(entry: dict) -> None:
 _income_cache: dict = {"data": None, "time": 0, "ttl": 120}  # 2 分钟缓存
 
 
+def _parse_iso_ts(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 async def _fetch_income_pnl(order_executor) -> dict | None:
     """从 Binance income API 拉取盈亏汇总 (分页拉全, 与交易所一致)."""
     import time as _time
@@ -95,8 +104,15 @@ async def _fetch_income_pnl(order_executor) -> dict | None:
         "net_pnl_30d": 0.0,
         "net_pnl_total": 0.0,
         "net_pnl_1d": 0.0,
+        "trade_count_1d": 0,
         "trade_count_7d": 0,
         "trade_count_30d": 0,
+        "winning_trades_1d": 0,
+        "losing_trades_1d": 0,
+        "winning_trades_7d": 0,
+        "losing_trades_7d": 0,
+        "winning_trades_30d": 0,
+        "losing_trades_30d": 0,
         "symbols_traded": set(),
         "total_events": len(all_incomes),
     }
@@ -108,6 +124,8 @@ async def _fetch_income_pnl(order_executor) -> dict | None:
     for i in all_incomes:
         t = i.time / 1000
         if i.income_type == "REALIZED_PNL":
+            is_win = i.income > 0
+            is_loss = i.income < 0
             result["total_realized_pnl"] += i.income
             if t >= cutoff_30d:
                 result["realized_pnl_30d"] += i.income
@@ -115,13 +133,26 @@ async def _fetch_income_pnl(order_executor) -> dict | None:
                 if i.symbol:
                     result["symbols_traded"].add(i.symbol)
                 result["trade_count_30d"] += 1
+                if is_win:
+                    result["winning_trades_30d"] += 1
+                elif is_loss:
+                    result["losing_trades_30d"] += 1
             if t >= cutoff_7d:
                 result["realized_pnl_7d"] += i.income
                 result["net_pnl_7d"] += i.income
                 result["trade_count_7d"] += 1
+                if is_win:
+                    result["winning_trades_7d"] += 1
+                elif is_loss:
+                    result["losing_trades_7d"] += 1
             if t >= cutoff_1d:
                 result["realized_pnl_1d"] += i.income
                 result["net_pnl_1d"] += i.income
+                result["trade_count_1d"] += 1
+                if is_win:
+                    result["winning_trades_1d"] += 1
+                elif is_loss:
+                    result["losing_trades_1d"] += 1
             result["net_pnl_total"] += i.income
         elif i.income_type == "COMMISSION":
             result["total_commission"] += i.income
@@ -183,6 +214,18 @@ async def _fetch_income_pnl(order_executor) -> dict | None:
     result["net_pnl_7d_pct"] = _pct(result["net_pnl_7d"])
     result["net_pnl_30d_pct"] = _pct(result["net_pnl_30d"])
     result["net_pnl_total_pct"] = _pct(total_net)
+    result["win_rate_1d"] = round(
+        result["winning_trades_1d"] / (result["winning_trades_1d"] + result["losing_trades_1d"]) * 100,
+        1,
+    ) if (result["winning_trades_1d"] + result["losing_trades_1d"]) > 0 else 0.0
+    result["win_rate_7d"] = round(
+        result["winning_trades_7d"] / (result["winning_trades_7d"] + result["losing_trades_7d"]) * 100,
+        1,
+    ) if (result["winning_trades_7d"] + result["losing_trades_7d"]) > 0 else 0.0
+    result["win_rate_30d"] = round(
+        result["winning_trades_30d"] / (result["winning_trades_30d"] + result["losing_trades_30d"]) * 100,
+        1,
+    ) if (result["winning_trades_30d"] + result["losing_trades_30d"]) > 0 else 0.0
 
     for k in list(result.keys()):
         if isinstance(result[k], float):
@@ -286,6 +329,14 @@ def create_health_app(
                     pos.setdefault("notional", 0.0)
                     pos.setdefault("sl_price", 0.0)
                     pos.setdefault("tp_price", 0.0)
+                    created_at = _parse_iso_ts(pos.get("created_at", ""))
+                    if created_at is not None:
+                        hold_seconds = max((datetime.now(tz=timezone.utc) - created_at).total_seconds(), 0.0)
+                        pos["opened_at"] = created_at.isoformat()
+                        pos["hold_seconds"] = int(hold_seconds)
+                    else:
+                        pos.setdefault("opened_at", "")
+                        pos.setdefault("hold_seconds", 0)
                     for ep in exchange_positions:
                         if ep.symbol == sym:
                             pos["mark_price"] = ep.mark_price
@@ -295,8 +346,11 @@ def create_health_app(
                             pos["liquidation_price"] = ep.liquidation_price
                             # 计算 ROI%
                             if ep.entry_price > 0:
+                                pnl_pct = (ep.mark_price - ep.entry_price) / ep.entry_price * 100
+                                if (ep.position_side or "").upper() == "SHORT" or ep.quantity < 0:
+                                    pnl_pct = -pnl_pct
                                 pos["roi_pct"] = round(
-                                    (ep.mark_price - ep.entry_price) / ep.entry_price * 100 * ep.leverage, 2
+                                    pnl_pct * ep.leverage, 2
                                 )
                             pos["notional"] = round(abs(ep.quantity) * ep.mark_price, 2)
                             break

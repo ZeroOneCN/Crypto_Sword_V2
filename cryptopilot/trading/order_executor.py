@@ -283,6 +283,7 @@ class OrderExecutor:
             raw = await self._signed_request("POST", "/fapi/v1/algoOrder", params)
         else:
             params = self._build_order_params(req, is_algo=False)
+            params["newOrderRespType"] = "RESULT"
             raw = await self._signed_request("POST", self._order_endpoint(), params)
         return self._parse_order_result(raw)
 

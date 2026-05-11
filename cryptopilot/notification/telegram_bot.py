@@ -496,6 +496,8 @@ class TelegramBot:
 
         if hold_sec > 0:
             parts.append(f"⏱ <b>持仓</b>: {_hold_duration(hold_sec)}")
+        elif data.hold_duration:
+            parts.append(f"⏱ <b>持仓</b>: {_html_esc(data.hold_duration)}")
 
         if data.extra and data.extra.get("strategy_line"):
             parts.append(f"🧭 <b>策略</b>: <code>{_html_esc(str(data.extra['strategy_line']))}</code>")
