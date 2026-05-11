@@ -160,10 +160,11 @@ def _mock_daily_pnl():
 def _mock_margin():
     return {"running": True, "warning_threshold": 0.80, "critical_threshold": 0.90}
 
-def _mock_logs():
+def _mock_logs(lines: int = 200):
     now = datetime.now(tz=timezone.utc)
-    lines = []
-    for i in range(20):
+    rows = []
+    count = max(1, min(int(lines or 200), 200))
+    for i in range(count):
         t = (now - timedelta(seconds=i*5)).strftime("%H:%M:%S")
         level = random.choices(["INFO", "INFO", "INFO", "WARNING", "DEBUG"], weights=[5,5,3,1,2])[0]
         msgs = {
@@ -184,8 +185,8 @@ def _mock_logs():
             ],
         }
         msg = random.choice(msgs.get(level, ["--"]))
-        lines.append({"time": t, "level": level, "msg": msg})
-    return {"lines": lines, "file": "logs/engine.log (preview)"}
+        rows.append({"time": t, "level": level, "msg": msg})
+    return {"lines": rows, "file": "logs/engine.log (preview)"}
 
 
 # ── Routes ────────────────────────────────────────────────────────
@@ -260,8 +261,8 @@ async def health_margin():
     return _mock_margin()
 
 @app.get("/health/logs")
-async def health_logs():
-    return _mock_logs()
+async def health_logs(lines: int = 200):
+    return _mock_logs(lines)
 
 
 if __name__ == "__main__":

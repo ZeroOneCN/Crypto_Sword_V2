@@ -47,24 +47,24 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
   }
   body{min-height:100vh;line-height:1.5}
-  .shell{width:100%;max-width:none;margin:0;padding:12px 8px 40px}
+  .shell{width:100%;max-width:none;margin:0;padding:14px 18px 40px}
   .hero{
-    position:sticky;top:0;z-index:9;margin-bottom:20px;
+    position:sticky;top:0;z-index:9;margin-bottom:18px;
     background:rgba(10,10,10,.78);backdrop-filter:blur(18px) saturate(130%);
     border:1px solid var(--line);border-radius:var(--radius-xl);
     box-shadow:var(--shadow);
   }
   .hero-inner{
     display:grid;grid-template-columns:minmax(0,1.8fr) minmax(340px,.9fr);
-    gap:20px;padding:22px 24px;
+    gap:16px;padding:18px 20px;
   }
   .eyebrow{color:var(--accent);font-size:12px;letter-spacing:.22em;text-transform:uppercase}
   h1{
-    margin:10px 0 0;font-size:40px;line-height:1.02;font-weight:700;
+    margin:8px 0 0;font-size:34px;line-height:1.02;font-weight:700;
     letter-spacing:-.04em;
   }
-  .hero-sub{margin-top:10px;color:var(--muted);max-width:760px;font-size:14px}
-  .hero-meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+  .hero-sub{margin-top:8px;color:var(--muted);max-width:760px;font-size:14px}
+  .hero-meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
   .pill{
     display:inline-flex;align-items:center;gap:8px;
     padding:9px 14px;border:1px solid var(--line);
@@ -79,13 +79,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     border:1px solid var(--line);background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015));
   }
   .hero-kpi{
-    border-radius:20px;padding:16px 18px;min-height:106px;
+    border-radius:20px;padding:14px 16px;min-height:94px;
   }
   .label{
     color:var(--muted);font-size:11px;letter-spacing:.15em;text-transform:uppercase
   }
   .value{
-    margin-top:10px;font-size:29px;letter-spacing:-.05em;font-weight:700
+    margin-top:8px;font-size:29px;letter-spacing:-.05em;font-weight:700
   }
   .hint{margin-top:6px;color:var(--dim);font-size:12px}
   .layout{
@@ -94,8 +94,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     grid-template-areas:
       "positions system"
       "performance performance"
-      "signals trend"
-      "trades logs";
+      "signals trades"
+      "trend logs";
     gap:18px;
     align-items:start
   }
@@ -185,7 +185,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .bar.neg{background:linear-gradient(180deg, rgba(255,106,95,.95), rgba(255,106,95,.35))}
   .trend-axis{display:flex;justify-content:space-between;color:var(--dim);font-size:11px;margin-top:8px}
   .log{
-    max-height:300px;overflow:auto;border-radius:16px;background:#101010;padding:14px;border:1px solid rgba(255,255,255,.06)
+    max-height:720px;overflow:auto;border-radius:16px;background:#101010;padding:14px;border:1px solid rgba(255,255,255,.06)
   }
   .log-line{display:flex;gap:12px;padding:4px 0;font-family:"Cascadia Mono",Consolas,monospace;font-size:12px}
   .log-time{color:var(--dim);min-width:62px}
@@ -204,9 +204,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         "positions"
         "system"
         "performance"
-        "trend"
         "signals"
         "trades"
+        "trend"
         "logs";
     }
     .hero-inner{grid-template-columns:1fr}
@@ -219,14 +219,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     .panel-head{align-items:flex-start}
   }
   @media(max-width:640px){
-    .shell{padding:14px 14px 28px}
+    .shell{padding:14px 12px 28px}
     .hero{position:relative;top:auto}
     .hero-inner,.panel{padding:16px}
     h1{font-size:30px}
     .hero-kpis,.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
     .value{font-size:25px}
     .metric-card .value{font-size:22px}
-    .hero-kpi,.metric-card{min-height:98px}
+    .hero-kpi,.metric-card{min-height:92px}
     .table-wrap{border-radius:14px}
   }
   @media(max-width:520px){
@@ -387,7 +387,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div class="panel-head">
           <div>
             <h2 class="panel-title">运行日志</h2>
-            <div class="panel-sub">最后 40 行核心日志，用来追异常与执行流。</div>
+            <div class="panel-sub">最后 200 行核心日志，用来追异常与执行流。</div>
           </div>
           <div class="badge neutral" id="hint_log">--</div>
         </div>
@@ -657,7 +657,7 @@ async function loadAll(){
 
 async function loadLogs(){
   try{
-    const r = await fetch('/health/logs?lines=40');
+    const r = await fetch('/health/logs?lines=200');
     const d = await r.json();
     if(!d.error && d.lines && d.lines.length > 0){
       document.getElementById('log_lines').innerHTML = d.lines.map(l => `
