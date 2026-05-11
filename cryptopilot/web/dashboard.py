@@ -187,12 +187,27 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     .hero-inner{grid-template-columns:1fr}
     .metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   }
-  @media(max-width:720px){
+  @media(max-width:900px){
+    .subgrid{grid-template-columns:1fr}
+    .feed-item{grid-template-columns:1fr;gap:8px}
+    .feed-item > div:last-child{justify-self:flex-start}
+    .panel-head{align-items:flex-start}
+  }
+  @media(max-width:640px){
     .shell{padding:14px 14px 28px}
+    .hero{position:relative;top:auto}
     .hero-inner,.panel{padding:16px}
     h1{font-size:30px}
-    .metric-grid,.subgrid,.hero-kpis{grid-template-columns:1fr}
+    .hero-kpis,.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .value{font-size:25px}
+    .metric-card .value{font-size:22px}
+    .hero-kpi,.metric-card{min-height:98px}
     .table-wrap{border-radius:14px}
+  }
+  @media(max-width:520px){
+    .hero-kpis,.metric-grid{grid-template-columns:1fr}
+    .value{font-size:23px}
+    .metric-card .value{font-size:20px}
   }
 </style>
 </head>
@@ -383,7 +398,15 @@ function holdLabel(sec){
   const days = Math.floor(hours / 24), remHours = hours % 24;
   return days + 'd' + String(remHours).padStart(2, '0') + 'h';
 }
-function fmtPct(v){ return v != null ? `${v >= 0 ? '+' : ''}${v}%` : '--'; }
+function fmtPct(v){
+  if(v == null || Number.isNaN(Number(v))) return '--';
+  const n = Number(v);
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+}
+function fmtRate(v){
+  if(v == null || Number.isNaN(Number(v))) return '--';
+  return `${Number(v).toFixed(1)}%`;
+}
 function metricHtml(usd, pctVal){
   return `<span class="${cls(usd)}">${money(usd)}</span> <span class="muted">${fmtPct(pctVal)}</span>`;
 }
@@ -479,9 +502,9 @@ async function loadAll(){
     document.getElementById('sys_core').innerHTML = sysCore.join('');
     document.getElementById('sys_risk').innerHTML = sysRisk.join('');
 
-    setMetric('perf_1d', money(pnlD.net_pnl_1d || 0), `${fmtPct(pnlD.net_pnl_1d_pct)} · 胜率 ${pnlD.win_rate_1d ?? 0}%`, cls(pnlD.net_pnl_1d || 0));
-    setMetric('perf_7d', money(pnlD.net_pnl_7d || 0), `${fmtPct(pnlD.net_pnl_7d_pct)} · 胜率 ${pnlD.win_rate_7d ?? 0}%`, cls(pnlD.net_pnl_7d || 0));
-    setMetric('perf_30d', money(pnlD.net_pnl_30d || 0), `${fmtPct(pnlD.net_pnl_30d_pct)} · 胜率 ${pnlD.win_rate_30d ?? 0}%`, cls(pnlD.net_pnl_30d || 0));
+    setMetric('perf_1d', money(pnlD.net_pnl_1d || 0), `${fmtPct(pnlD.net_pnl_1d_pct)} · 胜率 ${fmtRate(pnlD.win_rate_1d)}`, cls(pnlD.net_pnl_1d || 0));
+    setMetric('perf_7d', money(pnlD.net_pnl_7d || 0), `${fmtPct(pnlD.net_pnl_7d_pct)} · 胜率 ${fmtRate(pnlD.win_rate_7d)}`, cls(pnlD.net_pnl_7d || 0));
+    setMetric('perf_30d', money(pnlD.net_pnl_30d || 0), `${fmtPct(pnlD.net_pnl_30d_pct)} · 胜率 ${fmtRate(pnlD.win_rate_30d)}`, cls(pnlD.net_pnl_30d || 0));
     setMetric('perf_all', money(pnlD.net_pnl_total || 0), `${fmtPct(pnlD.net_pnl_total_pct)} · 总权益 ${plainMoney(pnlD.total_equity || 0)}`, cls(pnlD.net_pnl_total || 0));
     document.getElementById('hint_perf').textContent = '交易所盈亏口径 + 本地成交流量';
 
@@ -548,7 +571,7 @@ async function loadAll(){
         const direction = c.direction || 'HOLD';
         return feedItem(
           price(c.price),
-          `<b>${esc(c.symbol)}</b> · 扫描 ${esc(c.scanner_score)}</b>`,
+          `<b>${esc(c.symbol)}</b> · 扫描 ${esc(c.scanner_score)}`,
           `24h ${pct(c.change_24h || 0)} · 置信 ${(num(c.confidence || 0) * 100).toFixed(0)}% · 综合 ${Math.round(c.composite_score || c.total_score || c.score || 0)}`,
           tagDir(direction),
           esc(direction)
