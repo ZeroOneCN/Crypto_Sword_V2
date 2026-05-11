@@ -23,15 +23,21 @@ _MOCK_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "AVAXUSDT",
 _MOCK_POSITIONS = [
     {"symbol": "MOCAUSDT", "side": "LONG", "qty": 150.0, "leverage": 2,
      "entry_price": 0.06230, "mark_price": 0.06415, "unrealized_pnl": 27.75,
-     "roi_pct": 5.94, "margin_type": "cross",
+     "roi_pct": 5.94, "margin_type": "cross", "notional": 9.62,
+     "opened_at": (datetime.now(tz=timezone.utc) - timedelta(hours=3, minutes=12)).isoformat(),
+     "hold_seconds": 11520,
      "sl_price": 0.05850, "tp_price": 0.07150},
     {"symbol": "PROVEUSDT", "side": "LONG", "qty": 50.0, "leverage": 2,
      "entry_price": 0.2150, "mark_price": 0.2098, "unrealized_pnl": -2.60,
-     "roi_pct": -4.84, "margin_type": "cross",
+     "roi_pct": -4.84, "margin_type": "cross", "notional": 10.49,
+     "opened_at": (datetime.now(tz=timezone.utc) - timedelta(minutes=47)).isoformat(),
+     "hold_seconds": 2820,
      "sl_price": 0.1980, "tp_price": 0.2400},
     {"symbol": "HOTUSDT", "side": "SHORT", "qty": 3200.0, "leverage": 2,
      "entry_price": 0.00312, "mark_price": 0.00305, "unrealized_pnl": 2.24,
-     "roi_pct": 4.49, "margin_type": "cross",
+     "roi_pct": 4.49, "margin_type": "cross", "notional": 9.76,
+     "opened_at": (datetime.now(tz=timezone.utc) - timedelta(days=1, hours=5)).isoformat(),
+     "hold_seconds": 104400,
      "sl_price": 0.00330, "tp_price": 0.00280},
 ]
 
@@ -121,9 +127,21 @@ def _mock_pnl():
         "net_pnl_7d": random.uniform(-15, 25),
         "net_pnl_30d": random.uniform(-30, 60),
         "net_pnl_total": random.uniform(-20, 80),
+        "net_pnl_1d_pct": random.uniform(-5, 5),
+        "net_pnl_7d_pct": random.uniform(-10, 12),
+        "net_pnl_30d_pct": random.uniform(-18, 22),
+        "net_pnl_total_pct": random.uniform(-25, 35),
+        "trade_count_1d": random.randint(0, 5),
+        "trade_count_7d": random.randint(4, 22),
+        "trade_count_30d": random.randint(12, 60),
+        "win_rate_1d": random.choice([0, 50, 100]),
+        "win_rate_7d": random.uniform(40, 75),
+        "win_rate_30d": random.uniform(42, 71),
         "commission_7d": random.uniform(0.5, 3.0),
         "funding_7d": random.uniform(-1, 0.5),
         "symbols_traded": random.randint(5, 15),
+        "unrealized_pnl": random.uniform(-3, 9),
+        "total_equity": random.uniform(92, 118),
     }
 
 def _mock_positions():
@@ -219,6 +237,19 @@ async def health_orders():
 @app.get("/health/pnl")
 async def health_pnl():
     return _mock_pnl()
+
+@app.get("/health/volume")
+async def health_volume():
+    return {
+        "volume_1d": random.uniform(100, 1200),
+        "volume_7d": random.uniform(3000, 9000),
+        "volume_30d": random.uniform(9000, 38000),
+        "volume_total": random.uniform(18000, 85000),
+        "trades_1d": random.randint(0, 5),
+        "trades_7d": random.randint(6, 24),
+        "trades_30d": random.randint(18, 80),
+        "trades_total": random.randint(30, 180),
+    }
 
 @app.get("/health/report/30d")
 async def health_report_30d():

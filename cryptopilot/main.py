@@ -1259,6 +1259,8 @@ async def _execute_signal(
         logger.info(f"已撤销 {signal.symbol} 的挂单，准备平仓")
 
     # Check if we already have an open order (skip duplicate entries)
+    if signal.action.startswith("OPEN"):
+        await order_manager.sync_with_exchange(executor)
     if order_manager.has_open_order(signal.symbol) and signal.action.startswith("OPEN"):
         logger.info(f"信号跳过 — {signal.symbol} 已有挂单")
         return
