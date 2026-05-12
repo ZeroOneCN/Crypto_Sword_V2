@@ -688,15 +688,6 @@ async def main() -> None:
     await position_manager.sync_from_exchange(order_executor)
     await asyncio.sleep(1.5)
     await order_manager.sync_with_exchange(order_executor)
-    await _recover_missing_protection_orders(
-        executor=order_executor,
-        order_manager=order_manager,
-        position_manager=position_manager,
-        notifier=notifier,
-        event_repo=event_repo,
-        preset_runtime_map=preset_runtime_map,
-        default_runtime_cfg=default_runtime_cfg,
-    )
     logger.info(
         f"初始状态已加载: {position_manager.position_count} 个持仓, "
         f"{len(await order_manager.get_open_orders())} 个挂单"
@@ -1007,6 +998,15 @@ async def main() -> None:
         "tp2_ratio": float(cfg.scoring.tp_tiers.tp2_ratio),
         "tp3_ratio": float(cfg.scoring.tp_tiers.tp3_ratio),
     }
+    await _recover_missing_protection_orders(
+        executor=order_executor,
+        order_manager=order_manager,
+        position_manager=position_manager,
+        notifier=notifier,
+        event_repo=event_repo,
+        preset_runtime_map=preset_runtime_map,
+        default_runtime_cfg=default_runtime_cfg,
+    )
 
     # Wire Telegram commands to strategy engine
     SEP = "─────────────────────"
