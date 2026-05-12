@@ -98,6 +98,199 @@ async def _record_strategy_event(
     )
 
 
+def _parse_filled_tp_tiers(raw: str) -> set[int]:
+    tiers: set[int] = set()
+    for item in str(raw or "").split(","):
+        text = item.strip()
+        if text.isdigit():
+            tiers.add(int(text))
+    return tiers
+
+
+def _build_tp_targets(entry_price: float, side: str, runtime_cfg: dict) -> dict[int, dict]:
+    tp_specs = [
+        (1, float(runtime_cfg.get("tp1_pct", 3.0)), float(runtime_cfg.get("tp1_ratio", 0.30))),
+        (2, float(runtime_cfg.get("tp2_pct", 6.0)), float(runtime_cfg.get("tp2_ratio", 0.30))),
+        (3, float(runtime_cfg.get("tp3_pct", 10.0)), float(runtime_cfg.get("tp3_ratio", 0.40))),
+    ]
+    targets: dict[int, dict] = {}
+    is_long = side == "LONG"
+    for tier, pct, ratio in tp_specs:
+        price = entry_price * (1 + pct / 100) if is_long else entry_price * (1 - pct / 100)
+        targets[tier] = {"price": price, "pct": pct, "ratio": ratio}
+    return targets
+
+
+async def _recover_missing_protection_orders(
+    *,
+    executor,
+    order_manager,
+    position_manager,
+    notifier,
+    event_repo,
+    preset_runtime_map: dict[str, dict],
+    default_runtime_cfg: dict,
+) -> None:
+    """On startup, detect positions missing TP/SL orders and re-place only the missing protection."""
+
+    from cryptopilot.notification.notifier import EventData, Events
+    from cryptopilot.trading.order_executor import OrderRequest, _make_client_id
+    from cryptopilot.trading.precision import clamp_price, clamp_qty
+
+    positions = position_manager.get_all_positions()
+    if not positions:
+        return
+
+    is_hedge = await executor.get_position_mode()
+    open_orders = await executor.get_open_orders()
+    open_algo_orders = await executor.get_open_algo_orders()
+
+    regular_by_symbol: dict[str, list] = {}
+    for order in open_orders:
+        regular_by_symbol.setdefault(order.symbol, []).append(order)
+
+    algo_by_symbol: dict[str, list[dict]] = {}
+    for order in open_algo_orders:
+        symbol = str(order.get("symbol", "") or "")
+        if symbol:
+            algo_by_symbol.setdefault(symbol, []).append(order)
+
+    recovered_symbols: list[str] = []
+
+    for pos in positions:
+        symbol = str(pos.get("symbol", "") or "")
+        side = str(pos.get("side", "") or "").upper()
+        if not symbol or side not in {"LONG", "SHORT"}:
+            continue
+
+        qty = abs(float(pos.get("qty", 0) or 0))
+        entry_price = float(pos.get("entry_price", 0) or 0)
+        if qty <= 0 or entry_price <= 0:
+            continue
+
+        preset_name = str(pos.get("strategy_preset", "") or "")
+        runtime_cfg = dict(preset_runtime_map.get(preset_name, default_runtime_cfg))
+        tp_targets = _build_tp_targets(entry_price, side, runtime_cfg)
+        stop_price = float(pos.get("current_stop", 0) or pos.get("stop_loss_price", 0) or 0)
+        filled_tiers = _parse_filled_tp_tiers(str(pos.get("tp_tiers_filled", "") or ""))
+        remaining_tiers = [tier for tier in (1, 2, 3) if tier not in filled_tiers]
+        close_side = "SELL" if side == "LONG" else "BUY"
+        exchange_pos_side = side if is_hedge else ""
+
+        regular_orders = regular_by_symbol.get(symbol, [])
+        algo_orders = algo_by_symbol.get(symbol, [])
+
+        tp_orders = [
+            order for order in regular_orders
+            if str(order.side or "").upper() == close_side and str(order.order_type or "").upper() == "LIMIT"
+        ]
+        sl_orders = [
+            order for order in algo_orders
+            if str(order.get("side", "") or "").upper() == close_side
+            and "STOP" in str(order.get("type", "") or "").upper()
+        ]
+
+        existing_tp_tiers: set[int] = set()
+        for order in tp_orders:
+            order_price = float(getattr(order, "price", 0) or 0)
+            if order_price <= 0:
+                continue
+            closest_tier = min(
+                remaining_tiers,
+                key=lambda tier: abs(order_price - tp_targets[tier]["price"]),
+                default=None,
+            )
+            if closest_tier is not None:
+                existing_tp_tiers.add(closest_tier)
+
+        missing_sl = stop_price > 0 and len(sl_orders) == 0
+        tiers_to_place = [tier for tier in remaining_tiers if tier not in existing_tp_tiers]
+        if not missing_sl and not tiers_to_place:
+            continue
+
+        filters = executor.get_symbol_filters(symbol)
+        recovered_parts: list[str] = []
+
+        if missing_sl:
+            sl_req = OrderRequest(
+                symbol=symbol,
+                side=close_side,
+                order_type="STOP_MARKET",
+                quantity=qty,
+                stop_price=stop_price,
+                reduce_only=True,
+                position_side=exchange_pos_side,
+                client_order_id=_make_client_id("sl_recover"),
+            )
+            try:
+                sl_result = await executor.create_order(sl_req)
+                await order_manager.record_order(sl_result, str(pos.get("strategy_id", "") or symbol))
+                recovered_parts.append(f"SL @{stop_price:.5f}")
+            except Exception as exc:
+                logger.error(f"重启补挂 SL 失败: {symbol} {exc}")
+
+        if tiers_to_place:
+            open_tp_qty = sum(abs(float(getattr(order, "orig_qty", 0) or 0)) for order in tp_orders)
+            uncovered_qty = max(qty - open_tp_qty, 0.0)
+            remaining_ratio_total = sum(tp_targets[tier]["ratio"] for tier in tiers_to_place)
+            for tier in tiers_to_place:
+                tier_cfg = tp_targets[tier]
+                tp_qty = (
+                    uncovered_qty * (tier_cfg["ratio"] / remaining_ratio_total)
+                    if remaining_ratio_total > 0 else 0.0
+                )
+                tp_price = tier_cfg["price"]
+                if filters:
+                    tp_qty = clamp_qty(
+                        tp_qty,
+                        filters["step_size"],
+                        filters.get("min_qty", 0),
+                        filters["max_qty"],
+                    )
+                    tp_price = clamp_price(tp_price, filters["tick_size"])
+                if tp_qty <= 0:
+                    continue
+                tp_req = OrderRequest(
+                    symbol=symbol,
+                    side=close_side,
+                    order_type="LIMIT",
+                    quantity=tp_qty,
+                    price=tp_price,
+                    reduce_only=True,
+                    position_side=exchange_pos_side,
+                    client_order_id=_make_client_id(f"tp{tier}_recover"),
+                    time_in_force="GTC",
+                )
+                try:
+                    tp_result = await executor.create_order(tp_req)
+                    await order_manager.record_order(tp_result, str(pos.get("strategy_id", "") or symbol))
+                    recovered_parts.append(f"TP{tier} @{tp_price:.5f}")
+                except Exception as exc:
+                    logger.error(f"重启补挂 TP{tier} 失败: {symbol} {exc}")
+
+        if not recovered_parts:
+            continue
+
+        recovered_symbols.append(symbol)
+        message = f"重启补挂保护单 {symbol}: " + " | ".join(recovered_parts)
+        notifier.notify(EventData(event=Events.WARNING, message=message, symbol=symbol))
+        await _record_strategy_event(
+            event_repo,
+            str(pos.get("strategy_id", "") or symbol),
+            "protection_recovered",
+            symbol,
+            {
+                "preset": preset_name or "default",
+                "recovered": recovered_parts,
+                "filled_tiers": ",".join(str(tier) for tier in sorted(filled_tiers)),
+                "stop_price": f"{stop_price:.8f}" if stop_price > 0 else "",
+            },
+        )
+
+    if recovered_symbols:
+        logger.warning(f"启动补挂保护单完成: {', '.join(recovered_symbols)}")
+
+
 async def main() -> None:
     """Application bootstrap and main event loop."""
     # ---- Config ----
@@ -495,6 +688,15 @@ async def main() -> None:
     await position_manager.sync_from_exchange(order_executor)
     await asyncio.sleep(1.5)
     await order_manager.sync_with_exchange(order_executor)
+    await _recover_missing_protection_orders(
+        executor=order_executor,
+        order_manager=order_manager,
+        position_manager=position_manager,
+        notifier=notifier,
+        event_repo=event_repo,
+        preset_runtime_map=preset_runtime_map,
+        default_runtime_cfg=default_runtime_cfg,
+    )
     logger.info(
         f"初始状态已加载: {position_manager.position_count} 个持仓, "
         f"{len(await order_manager.get_open_orders())} 个挂单"
@@ -796,6 +998,15 @@ async def main() -> None:
         chat_id=env.telegram_chat_id,
         allowed_users=[u.strip() for u in env.telegram_allowed_users.split(",") if u.strip()] if env.telegram_allowed_users else [],
     )
+    default_runtime_cfg = {
+        "stop_loss_pct": float(cfg.risk.stop_loss_pct),
+        "tp1_pct": float(cfg.scoring.tp_tiers.tp1_pct),
+        "tp2_pct": float(cfg.scoring.tp_tiers.tp2_pct),
+        "tp3_pct": float(cfg.scoring.tp_tiers.tp3_pct),
+        "tp1_ratio": float(cfg.scoring.tp_tiers.tp1_ratio),
+        "tp2_ratio": float(cfg.scoring.tp_tiers.tp2_ratio),
+        "tp3_ratio": float(cfg.scoring.tp_tiers.tp3_ratio),
+    }
 
     # Wire Telegram commands to strategy engine
     SEP = "─────────────────────"

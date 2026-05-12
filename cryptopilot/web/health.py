@@ -60,6 +60,7 @@ def _event_badge(event_type: str) -> str:
     mapping = {
         "position_opened": "OPEN",
         "protection_placed": "PROTECT",
+        "protection_recovered": "RECOVER",
         "protection_failed": "REST",
         "partial_take_profit": "TP",
         "position_closed": "CLOSE",
@@ -1199,6 +1200,17 @@ def create_health_app(
                         f"TP1 {details.get('tp1_price', '--')} / "
                         f"TP2 {details.get('tp2_price', '--')} / "
                         f"TP3 {details.get('tp3_price', '--')}"
+                    )
+                elif event_type == "protection_recovered":
+                    item["title"] = f"{item['symbol']} protection recovered"
+                    recovered = details.get("recovered", [])
+                    if isinstance(recovered, list):
+                        recovered_text = " / ".join(str(item) for item in recovered) or "--"
+                    else:
+                        recovered_text = str(recovered or "--")
+                    item["detail"] = (
+                        f"{details.get('preset', '--')} | "
+                        f"{recovered_text}"
                     )
                 elif event_type == "partial_take_profit":
                     item["title"] = f"{item['symbol']} partial take profit"
