@@ -1450,16 +1450,16 @@ async def main() -> None:
                             message=f"{sym} 止损已移至保本位 {entry:.4f}",
                             symbol=sym,
                         ))
-                        await event_repo.create(StrategyEvent(
-                            strategy_id=strategy_ctx.get("strategy_id", sym),
-                            event_type="move_stop",
-                            symbol=sym,
-                            details=(
-                                '{"reason":"breakeven_after_profit_lock","preset":"'
-                                + preset_name
-                                + '"}'
-                            ),
-                        ))
+                        await _record_strategy_event(
+                            event_repo,
+                            str(strategy_ctx.get("strategy_id", sym) or sym),
+                            "move_stop",
+                            sym,
+                            {
+                                "reason": "breakeven_after_profit_lock",
+                                "preset": preset_name,
+                            },
+                        )
 
                     # Partial profit lock
                     if profit_locker.should_lock(sym, entry, mark, side):
@@ -1481,18 +1481,17 @@ async def main() -> None:
                         partial_signal.stop_loss = 0  # Don't set new SL/TP on close
                         partial_signal.take_profit = 0
                         await signal_queue.put(partial_signal)
-                        await event_repo.create(StrategyEvent(
-                            strategy_id=strategy_ctx.get("strategy_id", "profit_locker"),
-                            event_type="partial_take_profit",
-                            symbol=sym,
-                            details=(
-                                '{"reason":"profit_lock","preset":"'
-                                + preset_name
-                                + '","lock_fraction":"'
-                                + f"{profit_locker._lock_fraction:.2f}"
-                                + '"}'
-                            ),
-                        ))
+                        await _record_strategy_event(
+                            event_repo,
+                            str(strategy_ctx.get("strategy_id", "profit_locker") or "profit_locker"),
+                            "partial_take_profit",
+                            sym,
+                            {
+                                "reason": "profit_lock",
+                                "preset": preset_name,
+                                "lock_fraction": f"{profit_locker._lock_fraction:.2f}",
+                            },
+                        )
                         logger.info(
                             f"锁利执行: {sym} 平仓 {lock_qty:.4f} "
                             f"({profit_locker._lock_fraction*100:.0f}%) 价格 {mark:.4f}"
