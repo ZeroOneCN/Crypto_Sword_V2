@@ -6,6 +6,7 @@ Wires all modules together and runs the main event loop.
 from __future__ import annotations
 
 import asyncio
+import json
 import signal
 import sys
 import time
@@ -72,6 +73,29 @@ def _format_hold_duration(seconds: float) -> str:
         return f"{hours}h{minutes:02d}m"
     days, hours = divmod(hours, 24)
     return f"{days}d{hours:02d}h"
+
+
+async def _record_strategy_event(
+    event_repo,
+    strategy_id: str,
+    event_type: str,
+    symbol: str,
+    details: dict | None = None,
+) -> None:
+    """Persist structured activity for replay/dashboard use."""
+
+    if event_repo is None:
+        return
+    from cryptopilot.persistence.models import StrategyEvent
+
+    await event_repo.create(
+        StrategyEvent(
+            strategy_id=strategy_id or symbol,
+            event_type=event_type,
+            symbol=symbol,
+            details=json.dumps(details or {}, ensure_ascii=False, separators=(",", ":")),
+        )
+    )
 
 
 async def main() -> None:
@@ -271,6 +295,8 @@ async def main() -> None:
                 cid = event.client_order_id
                 status = event.order_status
                 executed = event.executed_qty
+                position_before = position_manager.get_position_context(event.symbol) or {}
+                prev_qty = abs(float(position_before.get("qty", 0) or 0))
                 if cid:
                     await order_manager.update_order(cid, status, executed)
 
@@ -320,11 +346,15 @@ async def main() -> None:
 
                     # 🆕 TP/SL 触发检测
                     cid = event.client_order_id or ""
+                    cid_lower = cid.lower()
                     is_sl = event.order_type == "STOP_MARKET"
                     is_tp = cid.startswith("tp")  # TP 单是 LIMIT 类型, 靠 client_order_id 识别
+                    is_tp = is_tp or any(token in cid_lower for token in ("tp1", "tp2", "tp3"))
+                    close_event_reason = ""
                     if is_sl or is_tp:
                         pnl = float(event.realized_pnl or 0)
                         if is_sl:
+                            close_event_reason = "SL_HIT"
                             notifier.sl_triggered(
                                 symbol=event.symbol,
                                 price=float(event.avg_price or 0),
@@ -333,16 +363,12 @@ async def main() -> None:
                             )
                         elif is_tp:
                             tier = 1
-                            if "tp2" in cid:
+                            if "tp2" in cid_lower:
                                 tier = 2
-                            elif "tp3" in cid:
+                            elif "tp3" in cid_lower:
                                 tier = 3
-                            positions = position_manager.get_all_positions()
-                            remaining = 0.0
-                            for p in positions:
-                                if p.get("symbol") == event.symbol:
-                                    remaining = abs(float(p.get("qty", 0) or 0))
-                                    break
+                            close_event_reason = f"TP{tier}"
+                            remaining = max(prev_qty - float(event.last_filled_qty or 0), 0.0)
                             notifier.tp_triggered(
                                 symbol=event.symbol,
                                 tier=tier,
@@ -360,6 +386,85 @@ async def main() -> None:
                                 event.symbol,
                                 tp_tiers_filled=",".join(tiers),
                                 partial_tp_count=len(tiers),
+                            )
+                            pos_ctx = position_manager.get_position_context(event.symbol) or position_before
+                            await _record_strategy_event(
+                                event_repo,
+                                str(pos_ctx.get("strategy_id", "") or event.symbol),
+                                "partial_take_profit",
+                                event.symbol,
+                                {
+                                    "preset": str(pos_ctx.get("strategy_preset", "") or ""),
+                                    "entry_reason": str(pos_ctx.get("entry_reason", "") or ""),
+                                    "exit_reason": f"TP{tier}",
+                                    "reason": f"TP{tier} filled",
+                                    "filled_price": float(event.avg_price or 0),
+                                    "realized_pnl": pnl,
+                                    "remaining_qty": remaining,
+                                    "tp_tiers_filled": ",".join(tiers),
+                                },
+                            )
+                        await position_manager.sync_from_exchange(order_executor)
+                        position_after = position_manager.get_position(event.symbol)
+                        remaining_after = abs(float(position_after.get("qty", 0) or 0)) if position_after else 0.0
+                        if prev_qty > 0 and remaining_after <= 1e-8:
+                            pos_ctx = position_manager.get_position_context(event.symbol) or position_before
+                            entry_px = float(pos_ctx.get("entry_price", 0) or 0)
+                            exit_px = float(event.avg_price or event.last_filled_price or event.price or 0)
+                            side = str(pos_ctx.get("side", "") or event.position_side or "LONG")
+                            pnl_pct = 0.0
+                            if entry_px > 0 and exit_px > 0:
+                                pnl_pct = (exit_px - entry_px) / entry_px * 100
+                                if side.upper() == "SHORT":
+                                    pnl_pct = -pnl_pct
+                            open_times = getattr(_execute_signal, "_position_open_time", {})
+                            open_ts = _get_position_open_ts(pos_ctx, open_times, event.symbol)
+                            hold_seconds = max(time.time() - open_ts, 0.0) if open_ts else 0.0
+                            hold_duration = _format_hold_duration(hold_seconds) if hold_seconds else ""
+                            exit_reason = close_event_reason or ("TP_HIT" if is_tp else "SL_HIT")
+                            await position_manager.mark_closed(
+                                event.symbol,
+                                side=side,
+                                exit_reason=exit_reason,
+                                exit_price=exit_px,
+                                exit_time=datetime.now(tz=timezone.utc).isoformat(),
+                                pnl=float(event.realized_pnl or 0),
+                                pnl_pct=pnl_pct,
+                            )
+                            await _record_strategy_event(
+                                event_repo,
+                                str(pos_ctx.get("strategy_id", "") or event.symbol),
+                                "position_closed",
+                                event.symbol,
+                                {
+                                    "preset": str(pos_ctx.get("strategy_preset", "") or ""),
+                                    "entry_reason": str(pos_ctx.get("entry_reason", "") or ""),
+                                    "exit_reason": exit_reason,
+                                    "pnl": round(float(event.realized_pnl or 0), 8),
+                                    "exit_price": exit_px,
+                                    "tp_tiers_filled": str(pos_ctx.get("tp_tiers_filled", "") or ""),
+                                },
+                            )
+                            notifier.position_closed(
+                                symbol=event.symbol,
+                                side=side,
+                                exit_price=exit_px,
+                                pnl=float(event.realized_pnl or 0),
+                                pnl_pct=pnl_pct,
+                                exit_reason=exit_reason,
+                                hold_duration=hold_duration,
+                                entry_reason=str(pos_ctx.get("entry_reason", "") or ""),
+                                strategy_id=str(pos_ctx.get("strategy_id", "") or ""),
+                                strategy_preset=str(pos_ctx.get("strategy_preset", "") or ""),
+                                support_presets=[
+                                    item.strip()
+                                    for item in str(pos_ctx.get("support_presets", "") or "").split(",")
+                                    if item.strip()
+                                ],
+                                opportunity_type=str(pos_ctx.get("strategy_preset", "") or ""),
+                                entry_price=entry_px,
+                                hold_seconds=hold_seconds,
+                                leverage=int(pos_ctx.get("leverage", 0) or 0),
                             )
             except Exception:
                 logger.exception("WS 订单更新处理异常")
@@ -1539,23 +1644,18 @@ async def _execute_signal(
         entry_reason = f"preset:{preset_name}|{factor_reason}"
         support_presets = list(getattr(signal, "supporting_presets", []) or [])
         opportunity_type = getattr(signal, "opportunity_type", "") or preset_name
-        if event_repo is not None:
-            from cryptopilot.persistence.models import StrategyEvent
-
-            await event_repo.create(StrategyEvent(
-                strategy_id=signal.strategy_id,
-                event_type="position_opened",
-                symbol=signal.symbol,
-                details=(
-                    '{"preset":"'
-                    + preset_name
-                    + '","support_presets":"'
-                    + ",".join(support_presets)
-                    + '","entry_reason":"'
-                    + entry_reason.replace('"', "'")
-                    + '"}'
-                ),
-            ))
+        await _record_strategy_event(
+            event_repo,
+            signal.strategy_id,
+            "position_opened",
+            signal.symbol,
+            {
+                "preset": preset_name,
+                "support_presets": ",".join(support_presets),
+                "entry_reason": entry_reason,
+                "opportunity_type": opportunity_type,
+            },
+        )
         notifier.position_opened(
             symbol=signal.symbol,
             side=pos_side,
@@ -1658,7 +1758,7 @@ async def _execute_signal(
                 except Exception as exc_tp:
                     logger.warning(f"TP 下单失败: {tp_req.symbol} {exc_tp}")
 
-            sl_tp_placed = sl_success and tp_count > 0
+            sl_tp_placed = sl_success and tp_count == 3
             logger.info(
                 f"保护单: {signal.symbol} SL={sl_price:.5f} "
                 f"TP1={tp1:.5f}({tp1_ratio*100:.0f}%) TP2={tp2:.5f}({tp2_ratio*100:.0f}%) TP3={tp3:.5f}({tp3_ratio*100:.0f}%) "
@@ -1683,33 +1783,23 @@ async def _execute_signal(
                     sl_pct=sl_pct_val,
                     tp_tiers=tp_placed,
                 )
-                if event_repo is not None:
-                    from cryptopilot.persistence.models import StrategyEvent
-
-                    await event_repo.create(StrategyEvent(
-                        strategy_id=signal.strategy_id,
-                        event_type="protection_placed",
-                        symbol=signal.symbol,
-                        details=(
-                            '{"sl_price":"'
-                            + f"{sl_price:.8f}"
-                            + '","tp_tiers":"'
-                            + ",".join(f"TP{item['tier']}" for item in tp_placed)
-                            + '","tp1_price":"'
-                            + f"{tp1:.8f}"
-                            + '","tp2_price":"'
-                            + f"{tp2:.8f}"
-                            + '","tp3_price":"'
-                            + f"{tp3:.8f}"
-                            + '","tp1_ratio":"'
-                            + f"{tp1_ratio:.4f}"
-                            + '","tp2_ratio":"'
-                            + f"{tp2_ratio:.4f}"
-                            + '","tp3_ratio":"'
-                            + f"{tp3_ratio:.4f}"
-                            + '"}'
-                        ),
-                    ))
+                await _record_strategy_event(
+                    event_repo,
+                    signal.strategy_id,
+                    "protection_placed",
+                    signal.symbol,
+                    {
+                        "sl_price": f"{sl_price:.8f}",
+                        "tp_tiers": ",".join(f"TP{item['tier']}" for item in tp_placed),
+                        "tp1_price": f"{tp1:.8f}",
+                        "tp2_price": f"{tp2:.8f}",
+                        "tp3_price": f"{tp3:.8f}",
+                        "tp1_ratio": f"{tp1_ratio:.4f}",
+                        "tp2_ratio": f"{tp2_ratio:.4f}",
+                        "tp3_ratio": f"{tp3_ratio:.4f}",
+                        "preset": preset_name,
+                    },
+                )
             elif sl_price <= 0:
                 logger.warning(f"{signal.symbol} 止损价无效, SL={sl_price}")
             else:
@@ -1772,23 +1862,20 @@ async def _execute_signal(
             pnl=pnl,
             pnl_pct=pnl_pct,
         )
-        if event_repo is not None:
-            from cryptopilot.persistence.models import StrategyEvent
-
-            await event_repo.create(StrategyEvent(
-                strategy_id=position_strategy_id or signal.strategy_id,
-                event_type="position_closed",
-                symbol=signal.symbol,
-                details=(
-                    '{"preset":"'
-                    + (position_strategy_preset or (signal.preset or ""))
-                    + '","exit_reason":"'
-                    + exit_reason
-                    + '","pnl":"'
-                    + f"{pnl:.8f}"
-                    + '"}'
-                ),
-            ))
+        await _record_strategy_event(
+            event_repo,
+            position_strategy_id or signal.strategy_id,
+            "position_closed",
+            signal.symbol,
+            {
+                "preset": position_strategy_preset or (signal.preset or ""),
+                "entry_reason": pos_entry_reason,
+                "exit_reason": exit_reason,
+                "pnl": f"{pnl:.8f}",
+                "exit_price": close_fill_price,
+                "tp_tiers_filled": str(pos.get("tp_tiers_filled", "") or "") if pos else "",
+            },
+        )
 
         notifier.position_closed(
             symbol=signal.symbol,

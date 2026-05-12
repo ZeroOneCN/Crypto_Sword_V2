@@ -60,6 +60,7 @@ def _event_badge(event_type: str) -> str:
     mapping = {
         "position_opened": "OPEN",
         "protection_placed": "PROTECT",
+        "protection_failed": "REST",
         "partial_take_profit": "TP",
         "position_closed": "CLOSE",
         "signal_rejected": "REJECT",
@@ -715,6 +716,7 @@ def create_health_app(
                     "opened_at": t.opened_at,
                     "closed_at": t.closed_at,
                     "hold_seconds": round(t.hold_seconds, 1),
+                    "entry_reason": t.entry_reason,
                     "exit_reason": t.exit_reason,
                     "tp_tiers_hit": t.tp_tiers_hit,
                 }
@@ -1200,12 +1202,24 @@ def create_health_app(
                     )
                 elif event_type == "partial_take_profit":
                     item["title"] = f"{item['symbol']} partial take profit"
-                    item["detail"] = details.get("reason", details_raw)
+                    item["detail"] = (
+                        f"{details.get('exit_reason', '--')} | "
+                        f"remaining {details.get('remaining_qty', '--')} | "
+                        f"{details.get('entry_reason', '--')}"
+                    )
                 elif event_type == "position_closed":
                     item["title"] = f"{item['symbol']} closed"
                     item["detail"] = (
                         f"{details.get('exit_reason', '--')} | "
-                        f"PnL {details.get('pnl', '--')}"
+                        f"PnL {details.get('pnl', '--')} | "
+                        f"{details.get('entry_reason', '--')}"
+                    )
+                elif event_type == "protection_failed":
+                    item["title"] = f"{item['symbol']} protection failed"
+                    item["detail"] = (
+                        f"SL ok={details.get('sl_success', '--')} | "
+                        f"TP count={details.get('tp_count', '--')} | "
+                        f"{details.get('reason', '--')}"
                     )
                 elif event_type == "signal_rejected":
                     item["title"] = f"{item['symbol']} signal rejected"

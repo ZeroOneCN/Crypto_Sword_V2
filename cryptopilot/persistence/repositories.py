@@ -237,6 +237,63 @@ class PositionRepository:
         )
 
 
+class PositionHistoryRepository:
+    """Archive for closed positions used by replay/report pages."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def archive(self, pos: PositionRecord) -> None:
+        archived_at = iso_now()
+        await self._db.execute(
+            """
+            INSERT OR REPLACE INTO position_history (
+                source_position_id, symbol, side, qty, entry_price, mark_price,
+                leverage, liquidation_price, unrealized_pnl, tp_tiers_filled,
+                partial_tp_count, highest_price, lowest_price, current_stop,
+                sideways_defense_moved, sideways_start_ts, initial_qty,
+                take_profit_price, stop_loss_price, strategy_id, strategy_preset,
+                support_presets, entry_reason, exit_reason, exit_price, exit_time,
+                pnl, pnl_pct, created_at, updated_at, archived_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pos.id or 0,
+                pos.symbol,
+                pos.side,
+                pos.qty,
+                pos.entry_price,
+                pos.mark_price,
+                pos.leverage,
+                pos.liquidation_price,
+                pos.unrealized_pnl,
+                pos.tp_tiers_filled,
+                pos.partial_tp_count,
+                pos.highest_price,
+                pos.lowest_price,
+                pos.current_stop,
+                pos.sideways_defense_moved,
+                pos.sideways_start_ts,
+                pos.initial_qty,
+                pos.take_profit_price,
+                pos.stop_loss_price,
+                pos.strategy_id,
+                pos.strategy_preset,
+                pos.support_presets,
+                pos.entry_reason,
+                pos.exit_reason,
+                pos.exit_price,
+                pos.exit_time,
+                pos.pnl,
+                pos.pnl_pct,
+                pos.created_at,
+                pos.updated_at,
+                archived_at,
+            ),
+        )
+
+
 class AccountRepository:
     """CRUD for account_snapshots table."""
 

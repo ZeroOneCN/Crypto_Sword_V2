@@ -5,7 +5,7 @@ from __future__ import annotations
 from loguru import logger
 
 from cryptopilot.persistence.database import Database
-from cryptopilot.persistence.repositories import PositionRepository
+from cryptopilot.persistence.repositories import PositionRepository, PositionHistoryRepository
 from cryptopilot.persistence.models import PositionRecord
 from cryptopilot.trading.order_executor import PositionInfo
 
@@ -16,8 +16,30 @@ class PositionManager:
     def __init__(self, db: Database) -> None:
         self._db = db
         self._repo = PositionRepository(db)
+        self._history_repo = PositionHistoryRepository(db)
         self._positions: dict[str, dict] = {}  # symbol -> db row
         self._closed_positions: dict[str, dict] = {}
+
+    async def _archive_position(self, position: dict | None) -> None:
+        """Persist a closed position snapshot into history for replay/reporting."""
+
+        if not position:
+            return
+        exit_time = str(position.get("exit_time", "") or "")
+        if not exit_time:
+            return
+        try:
+            payload = {
+                k: v for k, v in position.items()
+                if k in PositionRecord.__dataclass_fields__
+            }
+            rec = PositionRecord(**payload)
+            await self._history_repo.archive(rec)
+        except Exception:
+            logger.debug(
+                f"无法归档已平仓持仓 {position.get('symbol', '')}",
+                exc_info=True,
+            )
 
     @staticmethod
     def infer_strategy_from_metadata(position: dict | None) -> dict[str, str]:
@@ -126,7 +148,9 @@ class PositionManager:
         # Remove positions that are no longer open on exchange
         for sym in list(self._positions.keys()):
             if sym not in active_symbols:
-                self._closed_positions[sym] = dict(self._positions[sym])
+                closed_row = dict(self._positions[sym])
+                self._closed_positions[sym] = closed_row
+                await self._archive_position(closed_row)
                 await self._repo.delete(sym, self._positions[sym].get("side", ""))
                 self._positions.pop(sym, None)
 
@@ -271,6 +295,7 @@ class PositionManager:
                 pnl=pnl,
                 pnl_pct=pnl_pct,
             )
+            await self._archive_position(pos)
         except Exception:
             logger.debug(f"无法保存 close metadata for {symbol}")
 

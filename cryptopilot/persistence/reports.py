@@ -25,6 +25,7 @@ class TradeSummary:
     opened_at: str
     closed_at: str
     hold_seconds: float = 0.0
+    entry_reason: str = ""
     exit_reason: str = ""
     tp_tiers_hit: list[str] = field(default_factory=list)
 
@@ -155,7 +156,7 @@ class ReportGenerator:
         }
 
     async def _load_closed_trades(self, cutoff: str | None) -> list[TradeSummary]:
-        """Load closed trades from the positions table with fill-fee enrichment."""
+        """Load closed trades from archived position history with fill-fee enrichment."""
 
         sql = """
             SELECT p.*,
@@ -166,7 +167,7 @@ class ReportGenerator:
                        ORDER BY o.created_at DESC, o.id DESC
                        LIMIT 1
                    ), '') AS fallback_strategy_name
-            FROM positions p
+            FROM position_history p
             WHERE p.exit_time != ''
         """
         params: list = []
@@ -205,6 +206,7 @@ class ReportGenerator:
                 opened_at=created_at,
                 closed_at=exit_time,
                 hold_seconds=hold_seconds,
+                entry_reason=str(row.get("entry_reason", "") or ""),
                 exit_reason=str(row.get("exit_reason", "") or ""),
                 tp_tiers_hit=tp_tiers_hit,
             ))

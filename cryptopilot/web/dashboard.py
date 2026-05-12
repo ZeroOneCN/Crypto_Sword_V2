@@ -134,6 +134,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .panel-body{display:flex;flex-direction:column;gap:12px;min-height:0}
   .table-wrap{
     overflow:auto;
+    max-height:440px;
     border-radius:16px;
     border:1px solid rgba(255,255,255,.06);
     background:rgba(0,0,0,.16);
@@ -174,7 +175,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     display:flex;
     flex-direction:column;
     gap:10px;
-    max-height:420px;
+    max-height:360px;
     overflow:auto;
     padding-right:2px;
   }
@@ -230,7 +231,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .bar.neg{background:linear-gradient(180deg, rgba(255,118,103,.95), rgba(255,118,103,.35))}
   .axis{display:flex;justify-content:space-between;color:var(--dim);font-size:11px;padding:0 4px}
   .log-box{
-    max-height:520px;
+    max-height:420px;
     overflow:auto;
     border-radius:16px;
     border:1px solid rgba(255,255,255,.06);
@@ -519,6 +520,7 @@ function setText(id, value, className='value'){
 function renderLogs(data){
   const box = document.getElementById('log_lines');
   const nearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 36;
+  const prevScrollTop = box.scrollTop;
   logPinnedToBottom = nearBottom || box.innerHTML.trim() === '';
   if (!data || data.error || !Array.isArray(data.lines) || !data.lines.length){
     renderEmpty('log_lines', '暂无日志');
@@ -534,6 +536,8 @@ function renderLogs(data){
   `).join('');
   if (logPinnedToBottom){
     box.scrollTop = box.scrollHeight;
+  }else{
+    box.scrollTop = prevScrollTop;
   }
 }
 
@@ -670,7 +674,7 @@ async function loadAll(forceClock=false){
     }
 
     const signalItems = [];
-    (candidates.candidates || []).slice(0, 4).forEach(item => {
+    (candidates.candidates || []).slice(0, 3).forEach(item => {
       signalItems.push(feedItem(
         '候选',
         `<b>${esc(item.symbol)}</b> 扫描 ${esc(item.scanner_score)}`,
@@ -680,7 +684,7 @@ async function loadAll(forceClock=false){
         Object.entries(item.preset_scores || {}).map(([k, v]) => `${k}:${Math.round(num(v))}`)
       ));
     });
-    (signals.signals || []).slice().reverse().slice(0, 6).forEach(item => {
+    (signals.signals || []).slice().reverse().slice(0, 4).forEach(item => {
       const chips = [];
       if (item.preset) chips.push(`主策略 ${item.preset}`);
       (item.supporting_presets || []).forEach(v => chips.push(`支持 ${v}`));
@@ -706,7 +710,7 @@ async function loadAll(forceClock=false){
           esc(item.title || item.event_type || '--'),
           esc(item.detail || '--'),
           item.badge || item.event_type || '--',
-          item.event_type === 'signal_rejected' ? 'warn' : item.event_type === 'position_closed' ? 'short' : 'hold',
+          (item.event_type === 'signal_rejected' || item.event_type === 'protection_failed') ? 'warn' : item.event_type === 'position_closed' ? 'short' : 'hold',
           chips
         );
       }).join('');

@@ -77,6 +77,43 @@ CREATE_TABLES = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS position_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_position_id INTEGER DEFAULT 0,
+        symbol TEXT NOT NULL,
+        side TEXT NOT NULL,
+        qty REAL NOT NULL,
+        entry_price REAL NOT NULL,
+        mark_price REAL DEFAULT 0,
+        leverage INTEGER DEFAULT 1,
+        liquidation_price REAL DEFAULT 0,
+        unrealized_pnl REAL DEFAULT 0,
+        tp_tiers_filled TEXT DEFAULT '',
+        partial_tp_count INTEGER DEFAULT 0,
+        highest_price REAL DEFAULT 0,
+        lowest_price REAL DEFAULT 0,
+        current_stop REAL DEFAULT 0,
+        sideways_defense_moved INTEGER DEFAULT 0,
+        sideways_start_ts REAL DEFAULT 0,
+        initial_qty REAL DEFAULT 0,
+        take_profit_price REAL DEFAULT 0,
+        stop_loss_price REAL DEFAULT 0,
+        strategy_id TEXT DEFAULT '',
+        strategy_preset TEXT DEFAULT '',
+        support_presets TEXT DEFAULT '',
+        entry_reason TEXT DEFAULT '',
+        exit_reason TEXT DEFAULT '',
+        exit_price REAL DEFAULT 0,
+        exit_time TEXT DEFAULT '',
+        pnl REAL DEFAULT 0,
+        pnl_pct REAL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT NOT NULL,
+        UNIQUE(symbol, side, created_at, exit_time)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS account_snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         total_balance REAL NOT NULL,
@@ -107,6 +144,12 @@ CREATE_TABLES = [
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_positions_symbol ON positions(symbol);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_position_history_symbol ON position_history(symbol);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_position_history_exit_time ON position_history(exit_time);
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_snapshots_taken ON account_snapshots(taken_at);
