@@ -1529,6 +1529,8 @@ async def _execute_signal(
         logger.error(f"未知信号动作: {signal.action}")
         return
 
+    logical_pos_side = pos_side
+
     # For CLOSE signals: cancel any open SL/TP orders first
     if signal.action.startswith("CLOSE"):
         await executor.cancel_all_orders(signal.symbol)
@@ -1549,6 +1551,7 @@ async def _execute_signal(
     is_hedge = await executor.get_position_mode()
     if not is_hedge:
         pos_side = ""
+    exchange_pos_side = pos_side
 
     if circuit_breaker.tripped:
         return
@@ -1589,7 +1592,7 @@ async def _execute_signal(
         order_type=signal.order_type,
         quantity=qty,
         price=signal.price,
-        position_side=pos_side,
+        position_side=exchange_pos_side,
         reduce_only=signal.action.startswith("CLOSE"),
     )
 
@@ -1627,9 +1630,9 @@ async def _execute_signal(
             try:
                 await executor.create_order(OrderRequest(
                     symbol=signal.symbol,
-                    side="SELL" if pos_side == "LONG" else "BUY",
+                    side="SELL" if logical_pos_side == "LONG" else "BUY",
                     order_type="MARKET", quantity=qty,
-                    reduce_only=True, position_side=pos_side,
+                    reduce_only=True, position_side=exchange_pos_side,
                 ))
             except Exception:
                 logger.debug("紧急平仓降级尝试失败", exc_info=True)
@@ -1658,7 +1661,7 @@ async def _execute_signal(
         )
         notifier.position_opened(
             symbol=signal.symbol,
-            side=pos_side,
+            side=logical_pos_side,
             price=fill_price,
             qty=qty,
             leverage=default_leverage,
@@ -1684,7 +1687,7 @@ async def _execute_signal(
         if fill_price > 0:
             risk = risk_config or {}
             sl_pct = signal.stop_loss_pct or risk.get("stop_loss_pct", 5.0)
-            if pos_side == "LONG":
+            if logical_pos_side == "LONG":
                 sl_price = fill_price * (1 - sl_pct / 100)
             else:
                 sl_price = fill_price * (1 + sl_pct / 100)
@@ -1693,12 +1696,12 @@ async def _execute_signal(
                 try:
                     sl_req = OrderRequest(
                         symbol=signal.symbol,
-                        side="SELL" if pos_side == "LONG" else "BUY",
+                        side="SELL" if logical_pos_side == "LONG" else "BUY",
                         order_type="STOP_MARKET",
                         quantity=qty,
                         stop_price=sl_price,
                         reduce_only=True,
-                        position_side=pos_side,
+                        position_side=exchange_pos_side,
                         client_order_id=_make_client_id("sl"),
                     )
                     sl_r = await executor.create_order(sl_req)
@@ -1717,7 +1720,7 @@ async def _execute_signal(
             tp1_ratio = float(risk.get("tp1_ratio", 0.30))
             tp2_ratio = float(risk.get("tp2_ratio", 0.30))
             tp3_ratio = float(risk.get("tp3_ratio", 0.40))
-            if pos_side == "LONG":
+            if logical_pos_side == "LONG":
                 tp1 = fill_price * (1 + tp1_pct / 100)
                 tp2 = fill_price * (1 + tp2_pct / 100)
                 tp3 = fill_price * (1 + tp3_pct / 100)
@@ -1727,7 +1730,7 @@ async def _execute_signal(
                 tp3 = fill_price * (1 - tp3_pct / 100)
 
             tp_reqs = []
-            close_side = "SELL" if pos_side == "LONG" else "BUY"
+            close_side = "SELL" if logical_pos_side == "LONG" else "BUY"
             for tp_price, tp_qty_ratio, label in [
                 (tp1, tp1_ratio, "TP1"), (tp2, tp2_ratio, "TP2"), (tp3, tp3_ratio, "TP3")
             ]:
@@ -1745,7 +1748,7 @@ async def _execute_signal(
                         symbol=signal.symbol, side=close_side,
                         order_type="LIMIT", quantity=tp_qty,
                         price=tp_price_c, reduce_only=True,
-                        position_side=pos_side,
+                        position_side=exchange_pos_side,
                         client_order_id=_make_client_id(label.lower()),
                         time_in_force="GTC",
                     ))
@@ -1814,7 +1817,7 @@ async def _execute_signal(
         pos = position_before_close or position_manager.get_position_context(signal.symbol)
         entry_px = pos.get("entry_price", 0) if pos else 0
         pnl_pct = ((close_fill_price - entry_px) / entry_px * 100) if entry_px > 0 else 0
-        if pos_side == "SHORT":
+        if logical_pos_side == "SHORT":
             pnl_pct = -pnl_pct
 
         # Compute hold duration from in-memory open time or persisted position time.
@@ -1879,7 +1882,7 @@ async def _execute_signal(
 
         notifier.position_closed(
             symbol=signal.symbol,
-            side=pos_side,
+            side=logical_pos_side,
             exit_price=close_fill_price,
             pnl=pnl,
             pnl_pct=pnl_pct,
