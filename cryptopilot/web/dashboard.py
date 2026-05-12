@@ -171,6 +171,19 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     grid-template-columns:repeat(2,minmax(0,1fr));
     gap:12px;
   }
+  .split > *{min-width:0;min-height:0}
+  .report-split{align-items:start}
+  .report-column{min-width:0}
+  .report-feed-wrap{
+    min-width:0;
+    min-height:0;
+    padding:14px;
+    border-radius:18px;
+    border:1px solid rgba(255,255,255,.06);
+    background:rgba(0,0,0,.14);
+    overflow:hidden;
+  }
+  .report-feed{max-height:460px;padding-right:4px}
   .feed{
     display:flex;
     flex-direction:column;
@@ -333,8 +346,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
           </div>
           <span class="badge warn" id="trade_count_badge">--</span>
         </div>
-        <div class="panel-body split">
-          <div class="list">
+        <div class="panel-body split report-split">
+          <div class="list report-column">
             <div class="metrics">
               <div class="metric">
                 <div class="label">今日净盈亏</div>
@@ -362,7 +375,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
               <div class="list" id="report_summary"></div>
             </div>
           </div>
-          <div class="feed" id="recent_trades"></div>
+          <div class="report-feed-wrap">
+            <div class="panel-sub" style="margin-top:0">最近成交</div>
+            <div class="feed report-feed" id="recent_trades"></div>
+          </div>
         </div>
       </section>
 
