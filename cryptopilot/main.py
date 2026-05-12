@@ -1644,7 +1644,7 @@ async def _execute_signal(
                     tp_reqs.append(OrderRequest(
                         symbol=signal.symbol, side=close_side,
                         order_type="LIMIT", quantity=tp_qty,
-                        price=tp_price_c, reduce_only=False,
+                        price=tp_price_c, reduce_only=True,
                         position_side=pos_side,
                         client_order_id=_make_client_id(label.lower()),
                         time_in_force="GTC",
@@ -1695,6 +1695,18 @@ async def _execute_signal(
                             + f"{sl_price:.8f}"
                             + '","tp_tiers":"'
                             + ",".join(f"TP{item['tier']}" for item in tp_placed)
+                            + '","tp1_price":"'
+                            + f"{tp1:.8f}"
+                            + '","tp2_price":"'
+                            + f"{tp2:.8f}"
+                            + '","tp3_price":"'
+                            + f"{tp3:.8f}"
+                            + '","tp1_ratio":"'
+                            + f"{tp1_ratio:.4f}"
+                            + '","tp2_ratio":"'
+                            + f"{tp2_ratio:.4f}"
+                            + '","tp3_ratio":"'
+                            + f"{tp3_ratio:.4f}"
                             + '"}'
                         ),
                     ))

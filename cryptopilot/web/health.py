@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 from functools import wraps
@@ -53,6 +54,25 @@ def _parse_iso_ts(value: str) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _event_badge(event_type: str) -> str:
+    mapping = {
+        "position_opened": "OPEN",
+        "protection_placed": "PROTECT",
+        "partial_take_profit": "TP",
+        "position_closed": "CLOSE",
+        "signal_rejected": "REJECT",
+        "move_stop": "MOVE_SL",
+    }
+    return mapping.get(event_type, event_type.upper())
+
+
+def _safe_json_loads(raw: str) -> dict:
+    try:
+        return json.loads(raw or "{}")
+    except Exception:
+        return {}
 
 
 async def _recent_trade_symbols(db=None, position_manager=None, limit: int = 8) -> list[str]:
@@ -1130,6 +1150,79 @@ def create_health_app(
             entry.setdefault("opportunity_type", "")
             signals.append(entry)
         return {"total": len(_signal_log), "signals": signals}
+
+    @app.get("/health/activity")
+    async def health_activity(limit: int = 80):
+        """Unified recent activity feed for replay and dashboard display."""
+        if db is None:
+            return {"error": "database unavailable"}
+        try:
+            rows = await db.fetch_all(
+                """
+                SELECT strategy_id, event_type, symbol, details, created_at
+                FROM strategy_events
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            items: list[dict] = []
+            for row in rows:
+                event_type = str(row.get("event_type", "") or "")
+                details_raw = str(row.get("details", "") or "")
+                details = _safe_json_loads(details_raw)
+                strategy_id = str(row.get("strategy_id", "") or "")
+                preset = str(details.get("preset", "") or strategy_id.split("_", 1)[0])
+                item = {
+                    "time": row.get("created_at", ""),
+                    "symbol": str(row.get("symbol", "") or ""),
+                    "event_type": event_type,
+                    "badge": _event_badge(event_type),
+                    "strategy_id": strategy_id,
+                    "preset": preset,
+                    "details": details,
+                    "raw_details": details_raw,
+                }
+
+                if event_type == "position_opened":
+                    item["title"] = f"{item['symbol']} opened"
+                    item["detail"] = (
+                        f"{preset or strategy_id} | "
+                        f"{details.get('entry_reason', details.get('support_presets', ''))}"
+                    ).strip(" |")
+                elif event_type == "protection_placed":
+                    item["title"] = f"{item['symbol']} protection placed"
+                    item["detail"] = (
+                        f"SL {details.get('sl_price', '--')} | "
+                        f"TP1 {details.get('tp1_price', '--')} / "
+                        f"TP2 {details.get('tp2_price', '--')} / "
+                        f"TP3 {details.get('tp3_price', '--')}"
+                    )
+                elif event_type == "partial_take_profit":
+                    item["title"] = f"{item['symbol']} partial take profit"
+                    item["detail"] = details.get("reason", details_raw)
+                elif event_type == "position_closed":
+                    item["title"] = f"{item['symbol']} closed"
+                    item["detail"] = (
+                        f"{details.get('exit_reason', '--')} | "
+                        f"PnL {details.get('pnl', '--')}"
+                    )
+                elif event_type == "signal_rejected":
+                    item["title"] = f"{item['symbol']} signal rejected"
+                    item["detail"] = details.get("reason", details_raw)
+                elif event_type == "move_stop":
+                    item["title"] = f"{item['symbol']} stop updated"
+                    item["detail"] = details.get("reason", details_raw)
+                else:
+                    item["title"] = f"{item['symbol']} {event_type}"
+                    item["detail"] = details_raw or "--"
+
+                items.append(item)
+
+            return {"total": len(items), "items": items}
+        except Exception as exc:
+            logger.exception("activity endpoint failed")
+            return {"error": str(exc)}
 
     @app.get("/health/scoring-detail")
     async def health_scoring_detail():
