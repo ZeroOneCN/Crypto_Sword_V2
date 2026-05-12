@@ -133,6 +133,7 @@ async def _recover_missing_protection_orders(
 ) -> None:
     """On startup, detect positions missing TP/SL orders and re-place only the missing protection."""
 
+    from cryptopilot.core.exceptions import InvalidPrecision
     from cryptopilot.notification.notifier import EventData, Events
     from cryptopilot.trading.order_executor import OrderRequest, _make_client_id
     from cryptopilot.trading.precision import clamp_price, clamp_qty
@@ -232,6 +233,13 @@ async def _recover_missing_protection_orders(
         if tiers_to_place:
             open_tp_qty = sum(abs(float(getattr(order, "orig_qty", 0) or 0)) for order in tp_orders)
             uncovered_qty = max(qty - open_tp_qty, 0.0)
+            min_qty = float(filters.get("min_qty", 0) or 0) if filters else 0.0
+            if uncovered_qty <= 0 or (min_qty > 0 and uncovered_qty < min_qty):
+                logger.warning(
+                    f"重启补挂 TP 跳过: {symbol} 剩余可补数量 {uncovered_qty:.8f} "
+                    f"低于最小下单量 {min_qty:.8f}"
+                )
+                continue
             remaining_ratio_total = sum(tp_targets[tier]["ratio"] for tier in tiers_to_place)
             for tier in tiers_to_place:
                 tier_cfg = tp_targets[tier]
@@ -241,12 +249,19 @@ async def _recover_missing_protection_orders(
                 )
                 tp_price = tier_cfg["price"]
                 if filters:
-                    tp_qty = clamp_qty(
-                        tp_qty,
-                        filters["step_size"],
-                        filters.get("min_qty", 0),
-                        filters["max_qty"],
-                    )
+                    try:
+                        tp_qty = clamp_qty(
+                            tp_qty,
+                            filters["step_size"],
+                            filters.get("min_qty", 0),
+                            filters["max_qty"],
+                        )
+                    except InvalidPrecision:
+                        logger.warning(
+                            f"重启补挂 TP{tier} 跳过: {symbol} 数量 {tp_qty:.8f} "
+                            f"低于最小下单量 {float(filters.get('min_qty', 0) or 0):.8f}"
+                        )
+                        continue
                     tp_price = clamp_price(tp_price, filters["tick_size"])
                 if tp_qty <= 0:
                     continue
